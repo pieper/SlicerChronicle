@@ -9,9 +9,9 @@ import os, couchdb, json, urllib, tempfile
 class SlicerChronicle:
   def __init__(self, parent):
     parent.title = "SlicerChronicle" # TODO make this more human readable by adding spaces
-    parent.categories = ["Examples"]
+    parent.categories = ["Informatics"]
     parent.dependencies = []
-    parent.contributors = ["Jean-Christophe Fillion-Robin (Kitware), Steve Pieper (Isomics)"] # replace with "Firstname Lastname (Org)"
+    parent.contributors = ["Steve Pieper (Isomics)"] # replace with "Firstname Lastname (Org)"
     parent.helpText = """
     This is an example of scripted loadable module bundled in an extension.
     """
@@ -91,13 +91,13 @@ class SlicerChronicleWidget:
     #
     # check box to turn on series watching
     #
-    self.seriesWatchCheckBox = qt.QCheckBox()
-    self.seriesWatchCheckBox.checked = 0
-    self.seriesWatchCheckBox.setToolTip("When enabled, slicer will watch the chronicle db for new series load commands and will download and open the corresponding data.")
-    parametersFormLayout.addRow("Watch for Series", self.seriesWatchCheckBox)
+    self.stepWatchCheckBox = qt.QCheckBox()
+    self.stepWatchCheckBox.checked = 0
+    self.stepWatchCheckBox.setToolTip("When enabled, slicer will watch the chronicle db for new series load commands and will download and open the corresponding data.")
+    parametersFormLayout.addRow("Watch for Steps to Process", self.stepWatchCheckBox)
 
     # connections
-    self.seriesWatchCheckBox.connect('toggled(bool)', self.toggleSeriesWatch)
+    self.stepWatchCheckBox.connect('toggled(bool)', self.toggleStepWatch)
 
     # Add vertical spacer
     self.layout.addStretch(1)
@@ -108,13 +108,13 @@ class SlicerChronicleWidget:
     self.logic = SlicerChronicleLogic()
 
   def cleanup(self):
-    self.logic.stopSeriesWatcher()
+    self.logic.stopStepWatcher()
 
-  def toggleSeriesWatch(self,checked):
+  def toggleStepWatch(self,checked):
     if checked:
-      self.logic.startSeriesWatcher()
+      self.logic.startStepWatcher()
     else:
-      self.logic.stopSeriesWatcher()
+      self.logic.stopStepWatcher()
 
   def onReload(self,moduleName="SlicerChronicle"):
     """Generic reload method for any scripted module.
@@ -151,39 +151,72 @@ class SlicerChronicleLogic:
               ]
     self.changes = None
 
+    self.operations = {
+            "ChronicleStudyRender" : self.chronicleStudyRender,
+    }
+
     # connect to a local instance of couchdb (must be started externally)
     self.couchDB_URL='http://localhost:5984'
     self.databaseName='chronicle'
-   
+
     # connect to the database and register the changes API callback
     self.couch = couchdb.Server(self.couchDB_URL)
     self.db = self.couch[self.databaseName]
 
-  def startSeriesWatcher(self):
-    self.stopSeriesWatcher()
-    self.changes = CouchChanges(self.db, self.seriesWatcherChangesCallback)
+  def startStepWatcher(self):
+    self.stopStepWatcher()
+    self.changes = CouchChanges(self.db, self.stepWatcherChangesCallback)
 
-  def stopSeriesWatcher(self):
+  def stopStepWatcher(self):
     if self.changes:
       self.changes.stop()
       self.changes = None
 
-  def seriesWatcherChangesCallback(self, db, line):
+  def stepWatcherChangesCallback(self, db, line):
     try:
       if line != "":
         change = json.loads(line)
         doc = db[change['id']]
-        if 'seriesUID' in doc.keys():
-          self.downloadAndLoadSeries(doc['seriesUID'])
+        if 'type' in doc.keys() and doc['type'] == 'ch.step':
+          print(doc)
+          # <Document u'2.25.331237450000223992174473666375979231286'@u'1-d203faeea604bf2690cb26149de46425' {
+          #   u'inputs': [[[u'University of Washington', u'IRL Generic DRO'], [u'(20130528) IRL Generic PET/CT', u'1.3.6.1.4.1.150.2.1.1.2.20130529141416']]],
+          #   u'name': u'Study Render',
+          #   u'parameters': [],
+          #   u'outputs': [],
+          #   u'desiredProvenance': {
+          #     u'application': u'3D Slicer',
+          #     u'operation': u'ChronicleStudyRender',
+          #     u'version': u'4.3*'
+          #   },
+          #   u'type': u'ch.step'
+          # }>
+          #
+          # self.fetchAndLoadSeries(doc['seriesUID'])
+          if self.canPerformStep(doc):
+            operation = doc['desiredProvenance']['operation']
+            print("yes, we can do this!!!")
+            print("let's %s!" % operation)
+            self.operations[operation](doc)
         else:
           print("not a series")
     except Exception, e:
       import traceback
       traceback.print_exc()
 
-  def downloadAndLoadSeries(self,seriesUID):
-    import DICOMScalarVolumePlugin
-    import DICOMLib
+  def canPerformStep(self,stepDoc):
+    '''Analyze the step document to see if the current
+    instance of slicer is able to create a result with
+    the desired provenance.  Uses unix wildcard matching
+    conventions.'''
+    import fnmatch
+    prov = stepDoc['desiredProvenance']
+    applicationMatch = fnmatch.fnmatch("3D Slicer", prov['application'])
+    versionMatch = fnmatch.fnmatch("4.3.1", prov['version'])
+    operationMatch = prov['operation'] in self.operations.keys()
+    return (applicationMatch and versionMatch and operationMatch)
+
+  def fetchAndLoadSeries(self,seriesUID):
     tmpdir = tempfile.mkdtemp()
 
     api = "/_design/instances/_view/seriesInstances?reduce=false"
@@ -191,7 +224,7 @@ class SlicerChronicleLogic:
     seriesInstancesURL = self.db.resource().url + api + args
     urlFile = urllib.urlopen(seriesInstancesURL)
     instancesJSON = urlFile.read()
-    instances = json.loads(instancesJSON) 
+    instances = json.loads(instancesJSON)
     filesToLoad = []
     for instance in instances['rows']:
       classUID,instanceUID = instance['value']
@@ -203,11 +236,42 @@ class SlicerChronicleLogic:
         instanceFilePath = os.path.join(tmpdir, instanceFileName)
         urllib.urlretrieve(instanceURL, instanceFilePath)
         filesToLoad.append(instanceFilePath);
-    slicer.util.loadVolume(filesToLoad[0])
+      else:
+        print('this is not an instance we can load')
+    node = None
+    if filesToLoad != []:
+      node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
+    return node
 
+  def fetchAndLoadStudy(self,studyKey):
+
+    api = "/_design/instances/_view/context?reduce=true"
+    args = '&group_level=3'
+    args += '&startkey=%s' % json.dumps(studyKey)
+    studyKey.append({})
+    args += '&endkey=%s' % json.dumps(studyKey)
+
+    seriesListURL = self.db.resource().url + api + args
+    print('I think these are the series we need')
+    urlFile = urllib.urlopen(seriesListURL)
+    seriesListJSON = urlFile.read()
+    seriesList = json.loads(seriesListJSON)
+    rows = seriesList['rows']
+    for row in rows:
+      instanceCount = row['value']
+      seriesUID = row['key'][2][2]
+      print(seriesUID + ' should have ' + str(instanceCount) + ' instances' )
+      self.fetchAndLoadSeries(seriesUID)
+
+
+  def chronicleStudyRender(self,stepDoc):
+    print("okay, then let's render this study")
+    inputs = stepDoc['inputs']
+    for input in inputs:
+      self.fetchAndLoadStudy(input)
 
 class CouchChanges:
-  """Use the changes API of couchdb to 
+  """Use the changes API of couchdb to
   trigger actions in slicer
   """
 
@@ -227,11 +291,12 @@ class CouchChanges:
     line = self.changesSocket.readline().strip()
     if line == "":
       # heartbeat
-      print('heartbeat')
+      #print('heartbeat')
+      pass
     self.callback(self.db,line)
 
   def start(self):
-    """start a connection to the continuous feed of 
+    """start a connection to the continuous feed of
     couchdb changes.
     """
     try:
@@ -295,7 +360,7 @@ class SlicerChronicleTest(unittest.TestCase):
       self.delayDisplay('Exception in callback!')
 
   def test_SlicerChronicle1(self):
-    """ 
+    """
     Test the basic Slicer-as-agent approach.
     """
 
@@ -305,7 +370,7 @@ class SlicerChronicleTest(unittest.TestCase):
     # connect to a local instance of couchdb (must be started externally)
     couchDB_URL='http://localhost:5984'
     databaseName='chronicle'
-   
+
     # connect to the database and register the changes API callback
     couch = couchdb.Server(couchDB_URL)
     db = couch[databaseName]
