@@ -301,12 +301,15 @@ class SlicerChronicleLogic:
     """Convert the image to a secondary capture associated with
     the given reference DICOM file, then record it in chronicle"""
     import DICOMLib
+
+    # first, run img2dcm to make a dicom secondary capture
     args = ['-k', 'SeriesDescription=%s' % seriesDescription,
             '--study-from', studyReferenceFilePath,
             filePaths[0], filePaths[1]
             ]
     DICOMLib.DICOMCommand('img2dcm', args).start()
 
+    # then run the chronicle record script to upload it
     print( "running %s with %s" % (self.recordPath, [filePaths[1],]) )
     process = qt.QProcess()
     process.start(self.recordPath, [filePaths[1],] )
@@ -321,6 +324,16 @@ class SlicerChronicleLogic:
       print('standard error is: %s' % stderr)
       raise( UserWarning("Could not run %s with %s" % (self.recordPath, [filePaths[1],])) )
     print('dicom saved to', filePaths[1])
+
+    # finally attach the original image to the new document
+    # - it will have been given a new UID by img2dcm, and that
+    #   will be the id used in chronicle
+    import dicom
+    dataset = dicom.read_file(filePaths[1])
+    doc = self.db.get(dataset.SOPInstanceUID)
+    fp = open(filePaths[0])
+    self.db.put_attachment(doc, fp, 'image.jpg')
+    fp.close()
 
   def seriesRender(self,seriesVolumeNode,seriesDescription,orientation):
     """Make a mosaic with images covering the volume range for
