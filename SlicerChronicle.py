@@ -159,6 +159,10 @@ class SlicerChronicleLogic:
     self.couchDB_URL='http://localhost:5984'
     self.databaseName='chronicle'
 
+    # path to Chronicle utility source code
+    import os
+    self.recordPath = os.path.join(os.environ['HOME'], 'chronicle/Chronicle/bin/record.py')
+
     # connect to the database and register the changes API callback
     self.couch = couchdb.Server(self.couchDB_URL)
     self.db = self.couch[self.databaseName]
@@ -240,35 +244,106 @@ class SlicerChronicleLogic:
         print('this is not an instance we can load')
     node = None
     if filesToLoad != []:
-      node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
+      status, node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
     return node
 
-  def fetchAndLoadStudy(self,studyKey):
+  def fetchAndRenderStudy(self,studyKey):
+    """Download the study data from chronicle and make
+    a set of secondary captures"""
 
+    # construct the url to fetch the seriesList for this study
     api = "/_design/instances/_view/context?reduce=true"
     args = '&group_level=3'
     args += '&startkey=%s' % json.dumps(studyKey)
     studyKey.append({})
     args += '&endkey=%s' % json.dumps(studyKey)
-
     seriesListURL = self.db.resource().url + api + args
-    print('I think these are the series we need')
+    studyDescription = studyKey[1][0]
+
+    # get the series list and iterate
+    # - each row is a series and the key contains the UID and descriptions
     urlFile = urllib.urlopen(seriesListURL)
     seriesListJSON = urlFile.read()
     seriesList = json.loads(seriesListJSON)
     rows = seriesList['rows']
-    for row in rows:
+    orientations = ('Axial', 'Sagittal', 'Coronal')
+    studyVolumeNodes = []
+    for row in [rows[0],]:
       instanceCount = row['value']
       seriesUID = row['key'][2][2]
+      seriesDescription = row['key'][2][1]
       print(seriesUID + ' should have ' + str(instanceCount) + ' instances' )
-      self.fetchAndLoadSeries(seriesUID)
-
+      seriesVolumeNode = self.fetchAndLoadSeries(seriesUID)
+      if seriesVolumeNode:
+          studyVolumeNodes.append(seriesVolumeNode)
+          for orientation in orientations:
+            self.seriesRender(seriesVolumeNode,seriesDescription,orientation=orientation)
+    if studyVolumeNodes != []:
+      for orientation in orientations:
+        self.studyRender(studyVolumeNodes,studyDescription,orientation=orientation)
 
   def chronicleStudyRender(self,stepDoc):
-    print("okay, then let's render this study")
+    """Render each study on the input list"""
     inputs = stepDoc['inputs']
     for input in inputs:
-      self.fetchAndLoadStudy(input)
+      self.fetchAndRenderStudy(input)
+
+  def saveSliceViews(self,sliceNode,filePath):
+    """Frame grab the slice view widgets and save
+    them to the given file"""
+    slicer.app.processEvents() # wait for a render
+    layoutManager = slicer.app.layoutManager()
+    sliceWidget = layoutManager.sliceWidget(sliceNode.GetLayoutName())
+    pixmap = qt.QPixmap().grabWidget(sliceWidget.parent())
+    pixmap.save(filePath)
+
+  def makeAndRecordSecondaryCapture(self,filePaths,seriesDescription,studyReferenceFilePath):
+    """Convert the image to a secondary capture associated with
+    the given reference DICOM file, then record it in chronicle"""
+    import DICOMLib
+    args = ['-k', 'SeriesDescription=%s' % seriesDescription,
+            '--study-from', studyReferenceFilePath,
+            filePaths[0], filePaths[1]
+            ]
+    DICOMLib.DICOMCommand('img2dcm', args).start()
+
+    print( "running %s with %s" % (self.recordPath, [filePaths[1],]) )
+    process = qt.QProcess()
+    process.start(self.recordPath, [filePaths[1],] )
+    process.waitForFinished()
+    if process.exitStatus() == qt.QProcess.CrashExit or process.exitCode() != 0:
+      stdout = process.readAllStandardOutput()
+      stderr = process.readAllStandardError()
+      print('exit status is: %d' % process.exitStatus())
+      print('exit code is: %d' % process.exitCode())
+      print('error is: %d' % process.error())
+      print('standard out is: %s' % stdout)
+      print('standard error is: %s' % stderr)
+      raise( UserWarning("Could not run %s with %s" % (self.recordPath, [filePaths[1],])) )
+    print('dicom saved to', filePaths[1])
+
+  def seriesRender(self,seriesVolumeNode,seriesDescription,orientation):
+    """Make a mosaic with images covering the volume range for
+    the given orientation"""
+    import CompareVolumes
+    compareLogic = CompareVolumes.CompareVolumesLogic()
+    sliceNodeByViewName = compareLogic.volumeLightbox(seriesVolumeNode,orientation=orientation)
+    referenceFile = seriesVolumeNode.GetStorageNode().GetFileName()
+    jpgFilePath = os.path.join(slicer.app.temporaryPath, "%s-%s.jpg" % (orientation, 'seriesRender'))
+    self.saveSliceViews(sliceNodeByViewName.values()[0],jpgFilePath)
+    dcmFilePath = os.path.join(slicer.app.temporaryPath, "%s-%s.dcm" % (orientation, 'seriesRender'))
+    self.makeAndRecordSecondaryCapture((jpgFilePath,dcmFilePath),"Slicer Series Render", referenceFile)
+
+  def studyRender(self,studyVolumeNodes,studyDescription,orientation):
+    """Make a mosaic with one viewer for each series in the study"""
+    import CompareVolumes
+    compareLogic = CompareVolumes.CompareVolumesLogic()
+    sliceNodeByViewName = compareLogic.viewerPerVolume(volumeNodes=studyVolumeNodes,orientation=orientation)
+    referenceFile = studyVolumeNodes[0].GetStorageNode().GetFileName()
+    jpgFilePath = os.path.join(slicer.app.temporaryPath, "%s-%s.jpg" % (orientation, 'seriesRender'))
+    self.saveSliceViews(sliceNodeByViewName.values()[0],jpgFilePath)
+    dcmFilePath = os.path.join(slicer.app.temporaryPath, "%s-%s.dcm" % (orientation, 'seriesRender'))
+    self.makeAndRecordSecondaryCapture((jpgFilePath,dcmFilePath),"Slicer Study Render", referenceFile)
 
 class CouchChanges:
   """Use the changes API of couchdb to
