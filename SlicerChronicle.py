@@ -400,6 +400,32 @@ class CouchChanges:
     self.changesSocket.close()
     self.notifier = None
 
+class SlicerChronicleBrowser:
+  """A webview based patient/study/series browser"""
+  def __init__(self):
+    self.webView = qt.QWebView()
+
+  def webViewCallback(self,qurl):
+    url = qurl.toString()
+    print(url)
+    if url == 'reslicing':
+      self.reslicing()
+    if url == 'chart':
+      self.chartTest()
+    pass
+
+  def show(self):
+    html = """
+    <a href="reslicing">Run reslicing test</a>
+    <p>
+    <a href="chart">Run chart test</a>
+    """
+    self.webView.setHtml(html)
+    self.webView.settings().setAttribute(qt.QWebSettings.DeveloperExtrasEnabled, True)
+    self.webView.page().setLinkDelegationPolicy(qt.QWebPage.DelegateAllLinks)
+    self.webView.connect('linkClicked(QUrl)', self.webViewCallback)
+    self.webView.show()
+
 class SlicerChronicleTest(unittest.TestCase):
   """
   This is the test case for your scripted module.
@@ -452,7 +478,19 @@ class SlicerChronicleTest(unittest.TestCase):
     Test the basic Slicer-as-agent approach.
     """
 
-    self.delayDisplay("Starting the test")
+    self.delayDisplay("Starting the test",100)
+
+    browser = SlicerChronicleBrowser()
+    browser.show()
+    slicer.modules.SlicerChronicleWidget.browser = browser
+
+    dirPath = os.path.dirname(slicer.modules.slicerchronicle.path)
+    path = os.path.join(dirPath, "site/index.html")
+    url = qt.QUrl("file://" + path)
+    browser.webView.setUrl(url)
+
+  def test_changesAndHeartbeat(self):
+
     self.noticesReceived = []
 
     # connect to a local instance of couchdb (must be started externally)
@@ -473,11 +511,12 @@ class SlicerChronicleTest(unittest.TestCase):
 
     # should get a notification of our document, along with two heartbeat messages
     # (may also get other notices if the database is active)
-    self.delayDisplay("Waiting... ", 10100)
+    self.delayDisplay("Waiting... ", 1000)
 
     changes.stop()
 
     self.delayDisplay("noticesReceived: %s" % self.noticesReceived)
     self.assertTrue(len(self.noticesReceived) >= 3)
+
 
     self.delayDisplay('Test passed!')
