@@ -17,4 +17,10 @@ cd couchdb-python
 git checkout 0.9
 ${PYTHON} setup.py install
 
+echo
+echo
 echo "Built in ${tmpdir}"
+
+echo "optionally, run this to install in the application:"
+echo
+echo "(cd ${tmpdir} ; /Applications/Slicer-4.4.0.app/Contents/MacOS/Slicer setup.py install)"

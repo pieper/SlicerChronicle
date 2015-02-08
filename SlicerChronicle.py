@@ -134,7 +134,6 @@ class SlicerChronicleWidget:
       qt.QMessageBox.warning(slicer.util.mainWindow(),
           "Reload and Test", 'Exception!\n\n' + str(e) + "\n\nSee Python Console for Stack Trace")
 
-
 #
 # SlicerChronicleLogic
 #
@@ -330,7 +329,9 @@ class SlicerChronicleLogic:
     #   will be the id used in chronicle
     import dicom
     dataset = dicom.read_file(filePaths[1])
+    print('expecting to find', dataset.SOPInstanceUID)
     doc = self.db.get(dataset.SOPInstanceUID)
+    print('attempting to attache', filePaths[0])
     fp = open(filePaths[0])
     self.db.put_attachment(doc, fp, 'image.jpg')
     fp.close()
@@ -401,7 +402,10 @@ class CouchChanges:
     self.notifier = None
 
 class SlicerChronicleBrowser:
-  """A webview based patient/study/series browser"""
+  """
+  A webview based patient/study/series browser
+  """
+
   def __init__(self):
     self.webView = qt.QWebView()
 
@@ -425,6 +429,81 @@ class SlicerChronicleBrowser:
     self.webView.page().setLinkDelegationPolicy(qt.QWebPage.DelegateAllLinks)
     self.webView.connect('linkClicked(QUrl)', self.webViewCallback)
     self.webView.show()
+
+class SlicerChronicleContext:
+  """
+  Methods for operating on the patient/study/series/instance
+  dicom composite context via the chronicle api
+
+  based on the ctkDICOMDatabase context api
+  https://github.com/commontk/CTK/blob/d8cd14e7cd431732fa80206aadca5e6488417578/Libs/DICOM/Core/ctkDICOMDatabase.h#L132-L142
+
+  and chlib/context.js
+
+  https://github.com/pieper/ch/blob/246a3ab9d7e533f2013b77c4b9afd0124a98b2f3/chlib/context.js#L17-L59
+  """
+
+  def __init__(self,db):
+    self.db = db
+
+    self._commonOptions = {
+      'reduce': 'true',
+      'stale': 'update_after',
+      'group_level': '',
+      'startkey': '',
+      'endkey': '',
+    }
+
+
+  def viewList(self,options):
+    """Returns the list associated with the passed options"""
+
+    # construct the url to fetch the seriesList for this study
+    api = "/_design/instances/_view/context?reduce=%s" % options['reduce']
+    if options['reduce'] == 'true':
+      args = '&group_level=%s' % options['group_level']
+    args += '&startkey=%s' % options['startkey']
+    args += '&endkey=%s' % options['endkey']
+    args += '&stale=%s' % options['stale']
+
+    # each row is an entry and the key contains the UID and descriptions
+    viewListURL = self.db.resource().url + api + args
+    urlFile = urllib.urlopen(viewListURL)
+    viewListJSON = urlFile.read()
+    viewList = json.loads(viewListJSON)
+    print(viewList)
+    return(viewList['rows'])
+
+
+  def patients(self):
+    """returns a list of patients
+    patient is a tuple of [institution,mrn]
+    """
+    options = dict(self._commonOptions)
+    options['group_level'] = '1'
+    return self.viewList(options)
+
+  def studiesForPatient(self,patient):
+    """returns a list of studyUIDs
+    """
+    return []
+
+  def seriesForStudy(self,studyUID):
+    """returns a list of seriesUIDs
+    """
+    return []
+
+  def instancesForSeries(self,seriesUID):
+    """returns a list of instanceUIDs
+    """
+    return []
+
+  def instanceDataset(self,instanceUID):
+    """returns a pydicom dataset for the instance
+    """
+    ds = None
+    return ds
+
 
 class SlicerChronicleTest(unittest.TestCase):
   """
@@ -457,7 +536,7 @@ class SlicerChronicleTest(unittest.TestCase):
     """Run as few or as many tests as needed here.
     """
     self.setUp()
-    self.test_SlicerChronicle1()
+    self.test_SlicerChronicleLogic()
 
   def changesCallback(self,db,line):
     try:
@@ -473,7 +552,19 @@ class SlicerChronicleTest(unittest.TestCase):
       traceback.print_exc()
       self.delayDisplay('Exception in callback!')
 
-  def test_SlicerChronicle1(self):
+  def test_SlicerChronicleLogic(self):
+    """
+    Test the basic logic of the module for patient/study/series level
+    """
+    self.delayDisplay("Starting the test",100)
+
+    logic = SlicerChronicleLogic()
+    context = SlicerChronicleContext(logic.db)
+
+    self.delayDisplay(context.patients())
+
+
+  def test_SlicerChronicleWeb(self):
     """
     Test the basic Slicer-as-agent approach.
     """
