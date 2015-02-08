@@ -1,6 +1,7 @@
 import unittest
-from __main__ import vtk, qt, ctk, slicer
 import os, couchdb, json, urllib, tempfile
+import dicom
+from __main__ import vtk, qt, ctk, slicer
 
 #
 # SlicerChronicle
@@ -155,6 +156,7 @@ class SlicerChronicleLogic:
     }
 
     # connect to a local instance of couchdb (must be started externally)
+    self.couchDB_URL='http://common.bwh.harvard.edu:5984'
     self.couchDB_URL='http://localhost:5984'
     self.databaseName='chronicle'
 
@@ -331,7 +333,6 @@ class SlicerChronicleLogic:
     # finally attach the original image to the new document
     # - it will have been given a new UID by img2dcm, and that
     #   will be the id used in chronicle
-    import dicom
     dataset = dicom.read_file(filePaths[1])
     print('expecting to find', dataset.SOPInstanceUID)
     doc = self.db.get(dataset.SOPInstanceUID)
@@ -467,9 +468,9 @@ class SlicerChronicleContext:
     if options['reduce'] == 'true':
       args = '&group_level=%s' % options['group_level']
     if options['startkey'] != '':
-      args += '&startkey=%s' % options['startkey']
+      args += '&startkey=%s' % json.dumps(options['startkey'])
     if options['endkey'] != '':
-      args += '&endkey=%s' % options['endkey']
+      args += '&endkey=%s' % json.dumps(options['endkey'])
     args += '&stale=%s' % options['stale']
 
     # each row is an entry and the key contains the UID and descriptions
@@ -477,8 +478,10 @@ class SlicerChronicleContext:
     urlFile = urllib.urlopen(viewListURL)
     viewListJSON = urlFile.read()
     viewList = json.loads(viewListJSON)
-    print(viewList)
-    return(viewList['rows'])
+    if viewList.has_key('rows'):
+      return(viewList['rows'])
+    else:
+      return([])
 
 
   def patients(self):
@@ -490,24 +493,48 @@ class SlicerChronicleContext:
     return self.viewList(options)
 
   def studiesForPatient(self,patient):
-    """returns a list of studyUIDs
+    """returns a list of studies
     """
-    return []
+    options = dict(self._commonOptions)
+    options['group_level'] = '2'
+    options['startkey'] = patient
+    options['endkey'] = list(patient)
+    options['endkey'].append({})
+    return self.viewList(options)
 
-  def seriesForStudy(self,studyUID):
-    """returns a list of seriesUIDs
+  def seriesForStudy(self,study):
+    """returns a list of series
     """
-    return []
+    options = dict(self._commonOptions)
+    options['group_level'] = '3'
+    options['startkey'] = study
+    options['endkey'] = list(study)
+    options['endkey'].append({})
+    return self.viewList(options)
 
-  def instancesForSeries(self,seriesUID):
-    """returns a list of instanceUIDs
+  def instancesForSeries(self,series):
+    """returns a list of instances
     """
-    return []
+    api = "/_design/instances/_view/seriesInstances?reduce=false"
+    seriesUID = series[2][2]
+    args = '&key="%s"' % seriesUID
+    seriesInstancesURL = self.db.resource().url + api + args
+    urlFile = urllib.urlopen(seriesInstancesURL)
+    instancesJSON = urlFile.read()
+    instances = json.loads(instancesJSON)['rows']
+    return instances
 
-  def instanceDataset(self,instanceUID):
+  def instanceDataset(self,instance):
     """returns a pydicom dataset for the instance
     """
-    ds = None
+    classUID,instanceUID = instance['value']
+    doc = self.db[instanceUID]
+    instanceURL = self.db.resource().url + '/' + doc['_id'] + "/object.dcm"
+    instanceFileName = doc['_id']
+    tmpdir = tempfile.mkdtemp()
+    instanceFilePath = os.path.join(tmpdir, instanceFileName)
+    urllib.urlretrieve(instanceURL, instanceFilePath)
+    ds = dicom.read_file(instanceFilePath)
     return ds
 
 
@@ -567,7 +594,37 @@ class SlicerChronicleTest(unittest.TestCase):
     logic = SlicerChronicleLogic()
     context = SlicerChronicleContext(logic.db)
 
-    self.delayDisplay(context.patients())
+    # patient
+    patients = context.patients()
+    self.delayDisplay("There are " + str(len(patients)) + " patients", 200)
+
+    patientZero = patients[0]
+    self.delayDisplay("Patient Zero is " + str(patientZero), 200)
+
+    # study
+    studies = context.studiesForPatient(patientZero['key'])
+    self.delayDisplay("Patient Zero has " + str(len(studies)) + " studies", 200)
+
+    studyZero = studies[0]
+    self.delayDisplay("Study Zero is " + str(studyZero), 200)
+
+    # series
+    series = context.seriesForStudy(studyZero['key'])
+    self.delayDisplay("Study Zero has " + str(len(series)) + " series", 200)
+
+    seriesZero = series[0]
+    self.delayDisplay("Series Zero is " + str(seriesZero), 200)
+
+    # instance
+    instances = context.instancesForSeries(seriesZero['key'])
+    self.delayDisplay("Series Zero has " + str(len(instances)) + " instances", 200)
+
+    # datatset
+    instanceZero = instances[0]
+    self.delayDisplay("instance Zero is " + str(instanceZero), 200)
+
+    dataset = context.instanceDataset(instanceZero)
+    self.delayDisplay("instance Zero is a " + dataset.SOPClassUID + " ", 200)
 
 
   def test_SlicerChronicleWeb(self):
