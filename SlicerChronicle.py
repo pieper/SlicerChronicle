@@ -164,7 +164,11 @@ class SlicerChronicleLogic:
 
     # connect to the database and register the changes API callback
     self.couch = couchdb.Server(self.couchDB_URL)
-    self.db = self.couch[self.databaseName]
+    try:
+      self.db = self.couch[self.databaseName]
+    except Exception, e:
+      import traceback
+      traceback.print_exc()
 
   def startStepWatcher(self):
     self.stopStepWatcher()
@@ -462,8 +466,10 @@ class SlicerChronicleContext:
     api = "/_design/instances/_view/context?reduce=%s" % options['reduce']
     if options['reduce'] == 'true':
       args = '&group_level=%s' % options['group_level']
-    args += '&startkey=%s' % options['startkey']
-    args += '&endkey=%s' % options['endkey']
+    if options['startkey'] != '':
+      args += '&startkey=%s' % options['startkey']
+    if options['endkey'] != '':
+      args += '&endkey=%s' % options['endkey']
     args += '&stale=%s' % options['stale']
 
     # each row is an entry and the key contains the UID and descriptions
