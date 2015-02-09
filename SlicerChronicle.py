@@ -156,8 +156,8 @@ class SlicerChronicleLogic:
     }
 
     # connect to a local instance of couchdb (must be started externally)
-    self.couchDB_URL='http://common.bwh.harvard.edu:5984'
     self.couchDB_URL='http://localhost:5984'
+    self.couchDB_URL='http://common.bwh.harvard.edu:5984'
     self.databaseName='chronicle'
 
     # path to Chronicle utility source code
