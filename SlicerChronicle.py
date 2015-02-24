@@ -569,7 +569,8 @@ class SlicerChronicleTest(unittest.TestCase):
     """Run as few or as many tests as needed here.
     """
     self.setUp()
-    self.test_SlicerChronicleLogic()
+    self.test_SlicerChronicleWeb()
+    #self.test_SlicerChronicleLogic()
 
   def changesCallback(self,db,line):
     try:
