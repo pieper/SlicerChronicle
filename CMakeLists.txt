@@ -1,30 +1,26 @@
-#-----------------------------------------------------------------------------
-set(MODULE_NAME SlicerChronicle)
+cmake_minimum_required(VERSION 2.8.9)
+
+project(SlicerChronicle)
 
 #-----------------------------------------------------------------------------
-set(MODULE_PYTHON_SCRIPTS
-  ${MODULE_NAME}.py
-  )
-
-set(MODULE_PYTHON_RESOURCES
-  )
-
-#-----------------------------------------------------------------------------
-slicerMacroBuildScriptedModule(
-  NAME ${MODULE_NAME}
-  SCRIPTS ${MODULE_PYTHON_SCRIPTS}
-  RESOURCES ${MODULE_PYTHON_RESOURCES}
-  WITH_GENERIC_TESTS
-  )
+# Extension meta-information
+set(EXTENSION_HOMEPAGE "http://www.example.com/Slicer/Extensions/SlicerChronicle")
+set(EXTENSION_CATEGORY "Informatics")
+set(EXTENSION_CONTRIBUTORS "Steve Pieper (Isomics, Inc.)")
+set(EXTENSION_DESCRIPTION "This extension provides interfaces to Chronicle.")
+set(EXTENSION_ICONURL "http://www.example.com/Slicer/Extensions/SlicerChronicle.png")
+set(EXTENSION_SCREENSHOTURLS "http://www.example.com/Slicer/Extensions/SlicerChronicle/Screenshots/1.png")
 
 #-----------------------------------------------------------------------------
-if(BUILD_TESTING)
+# Extension dependencies
+find_package(Slicer REQUIRED)
+include(${Slicer_USE_FILE})
 
-  # Register the unittest subclass in the main script as a ctest.
-  # Note that the test will also be available at runtime.
-  slicer_add_python_unittest(SCRIPT ${MODULE_NAME}.py)
+#-----------------------------------------------------------------------------
+# Extension modules
+add_subdirectory(SceneViewer)
+add_subdirectory(SlicerChronicle)
+## NEXT_MODULE
 
-  # Additional build-time testing
-  add_subdirectory(Testing)
-endif()
-
+#-----------------------------------------------------------------------------
+include(${Slicer_EXTENSION_CPACK})
