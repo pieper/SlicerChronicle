@@ -1,5 +1,7 @@
 import os
 import unittest
+import couchdb, couchdb.http
+import os, couchdb, json, urllib, tempfile, time
 from __main__ import vtk, qt, ctk, slicer
 from slicer.ScriptedLoadableModule import *
 
@@ -15,15 +17,14 @@ class SceneViewer(ScriptedLoadableModule):
   def __init__(self, parent):
     ScriptedLoadableModule.__init__(self, parent)
     self.parent.title = "SceneViewer" # TODO make this more human readable by adding spaces
-    self.parent.categories = ["Examples"]
+    self.parent.categories = ["Informatics"]
     self.parent.dependencies = []
-    self.parent.contributors = ["John Doe (AnyWare Corp.)"] # replace with "Firstname Lastname (Organization)"
+    self.parent.contributors = ["Steve Pieper (Isomics, Inc.)"] # replace with "Firstname Lastname (Organization)"
     self.parent.helpText = """
-    This is an example of scripted loadable module bundled in an extension.
+    This module tracks the MRML scene and enters the result in a database for later recall.
     """
     self.parent.acknowledgementText = """
-    This file was originally developed by Jean-Christophe Fillion-Robin, Kitware Inc.
-    and Steve Pieper, Isomics, Inc. and was partially funded by NIH grant 3P41RR013218-12S1.
+    This module developed by Steve Pieper, Isomics, Inc.  This work is supported by NIH National Cancer Institute (NCI), award U24 CA180918 (QIICR: Quantitative Image Informatics for Cancer Research) and the National Institute of Biomedical Imaging and Bioengineering (NIBIB), award P41 EB015902 (NAC: Neuroimage Analysis Center).
 """ # replace with organization, grant and thanks.
 
 #
@@ -135,81 +136,160 @@ class SceneViewerWidget(ScriptedLoadableModuleWidget):
 #
 
 class SceneViewerLogic(ScriptedLoadableModuleLogic):
-  """This class should implement all the actual
-  computation done by your module.  The interface
-  should be such that other python code can import
-  this class and make use of the functionality without
-  requiring an instance of the Widget.
-  Uses ScriptedLoadableModuleLogic base class, available at:
-  https://github.com/Slicer/Slicer/blob/master/Base/Python/slicer/ScriptedLoadableModule.py
+  """Maps mrml scene data and events into couchdb
   """
 
-  def hasImageData(self,volumeNode):
-    """This is a dummy logic method that
-    returns true if the passed in volume
-    node has valid image data
+  def __init__(self, parent=None):
+    ScriptedLoadableModuleLogic.__init__(self,parent)
+
+    self.server = None # couchdb.Server
+    self.database = None # couchdb.Database
+    self.sceneObservers = [] # (eventtype, observertag)
+    self.nodeObservers = {} # (eventtype, observertag) by node
+
+    # a scratch scene to use for generating and parsing xml representations
+    # of mrml nodes
+    self.helperScene = slicer.vtkMRMLScene()
+    self.helperScene.SetSaveToXMLString(1)
+    self.helperScene.SetLoadFromXMLString(1)
+
+  def timeStamp(self):
+    """Return a string of the current time with microsecond resolution"""
+    return "%.6f" % time.time()
+
+  def defaultDatabaseName(self):
+    hostname = os.uname()[1]
+    username = os.getenv('USER')
+    dateTime = self.timeStamp()
+    return "SceneViewer/%s/%s/%s" % (hostname, username, dateTime)
+
+  def connect(self,server='localhost:5984',database=''):
     """
-    if not volumeNode:
-      print('no volume node')
-      return False
-    if volumeNode.GetImageData() == None:
-      print('no image data')
-      return False
+    Connects the current mrml scene to the SceneViewer database,
+    which is a coucbdb instance running at server.  Scene information
+    is stored in a database named database or SceneViewer/Hostname/username/DateTime.
+    """
+
+    # connect to couchdb instance and database
+    if database == '':
+      database = self.defaultDatabaseName()
+    if not server.startswith('http://'):
+      server = 'http://'+server
+    self.server = couchdb.Server(server)
+    try:
+      if not database in self.server:
+        self.server.create(database)
+      self.db = self.server[database]
+    except Exception as e:
+      import traceback
+      traceback.print_exc()
+
+    # take an initial snapshot of the scene
+    self.reportScene()
+    # observe any changes
+    self.observeScene()
     return True
 
-  def takeScreenshot(self,name,description,type=-1):
-    # show the message even if not taking a screen shot
-    self.delayDisplay(description)
+  def disconnect(self):
+    """Remove all observers and close connection to database"""
+    for event,tag in self.sceneObservers:
+      slicer.mrmlScene.RemoveObserver(tag)
+    for node in self.nodeObservers.keys():
+      node.RemoveObserver(self.nodeObservers[node][1])
+    self.database = None
+    self.server = None
+    self.sceneObservers = []
+    self.nodeObservers = {}
 
-    if self.enableScreenshots == 0:
+  def reportScene(self):
+    """Record a document to of the current set of nodes of the scene.
+    Also refresh observers to include only the currently present nodes.
+    """
+    nodeIDsToRecord = []
+    previousNodes = self.nodeObservers.keys()
+    scene = slicer.mrmlScene
+    scene.InitTraversal()
+    node = scene.GetNextNode()
+    while node:
+      nodeID = node.GetID()
+      nodeIDsToRecord.append(nodeID)
+      if node in self.nodeObservers.keys():
+        previousNodes.remove(node)
+      else:
+        print(('observing', node))
+        self.observeNode(node)
+      node = scene.GetNextNode()
+    for node in previousNodes:
+      print(('UNobserving', node))
+      # remove any observations for nodes that aren't in the scene
+      node.RemoveObserver(self.nodeObservers[node][1])
+    document = {
+      '_id' : "nodeSet-"+self.timeStamp(),
+      'nodeIDs' : nodeIDsToRecord
+    }
+    self.db.save(document)
+
+  def reportNode(self,node):
+    copyNode = self.helperScene.CreateNodeByClass(node.GetClassName())
+    if not copyNode:
+      print('Warning: %s is is not registered with the scene' % node.GetClassName())
       return
+    copyNode.Copy(node)
+    self.helperScene.Clear(1)
+    self.helperScene.AddNode(copyNode)
+    self.helperScene.Commit()
+    mrml = self.helperScene.GetSceneXMLString()
+    # usually changing the node id is only done by scene,
+    # but here we know what we are doing and we want it
+    # to be consistent with the original node's id.
+    mrml.replace('id="'+node.GetID()+'"', 'id="'+copyNode.GetID()+'"')
+    document = {
+      '_id' : node.GetID() + "-" + self.timeStamp(),
+      'mrml' : mrml
+    }
+    self.db.save(document)
 
-    lm = slicer.app.layoutManager()
-    # switch on the type to get the requested window
-    widget = 0
-    if type == slicer.qMRMLScreenShotDialog.FullLayout:
-      # full layout
-      widget = lm.viewport()
-    elif type == slicer.qMRMLScreenShotDialog.ThreeD:
-      # just the 3D window
-      widget = lm.threeDWidget(0).threeDView()
-    elif type == slicer.qMRMLScreenShotDialog.Red:
-      # red slice window
-      widget = lm.sliceWidget("Red")
-    elif type == slicer.qMRMLScreenShotDialog.Yellow:
-      # yellow slice window
-      widget = lm.sliceWidget("Yellow")
-    elif type == slicer.qMRMLScreenShotDialog.Green:
-      # green slice window
-      widget = lm.sliceWidget("Green")
+    # TODO:
+    # check for storable nodes and check the modified times
+    # of the bulk data relative to the node - may require new
+    # method on the nodes to provide the information generically.
+    # If the bulk data does need saving, add to a queue that can
+    # be processed in the background (possibly skipping frames
+    # if data is coming too quickly, then drop any intermediate frames
+    # but only save the most recent for a given node).
+
+  def observeScene(self):
+    """Add observers to the mrmlScene and also to all the nodes of the scene"""
+
+    scene = slicer.mrmlScene
+    tag = scene.AddObserver(scene.NodeAddedEvent, self.onNodeAdded)
+    self.sceneObservers.append( (scene.NodeAddedEvent, tag) )
+    tag = scene.AddObserver(scene.NodeRemovedEvent, self.onNodeRemoved)
+    self.sceneObservers.append( (scene.NodeRemovedEvent, tag) )
+
+    scene.InitTraversal()
+    node = scene.GetNextNode()
+    while node:
+      self.reportNode(node)
+      self.observeNode(node)
+      node = scene.GetNextNode()
+
+  def observeNode(self,node):
+    if node.IsA('vtkMRMLNode'):
+      # use AnyEvent since it will catch events like TransformModified
+      tag = node.AddObserver(vtk.vtkCommand.AnyEvent, self.onNodeModified)
+      self.nodeObservers[node] = (vtk.vtkCommand.ModifiedEvent, tag)
     else:
-      # default to using the full window
-      widget = slicer.util.mainWindow()
-      # reset the type so that the node is set correctly
-      type = slicer.qMRMLScreenShotDialog.FullLayout
+      raise('should not happen: non node is in scene')
 
-    # grab and convert to vtk image data
-    qpixMap = qt.QPixmap().grabWidget(widget)
-    qimage = qpixMap.toImage()
-    imageData = vtk.vtkImageData()
-    slicer.qMRMLUtils().qImageToVtkImageData(qimage,imageData)
+  def onNodeAdded(self,scene,eventName):
+    self.reportScene()
 
-    annotationLogic = slicer.modules.annotations.logic()
-    annotationLogic.CreateSnapShot(name, description, type, self.screenshotScaleFactor, imageData)
+  def onNodeRemoved(self,node,eventName):
+    self.reportScene()
 
-  def run(self,inputVolume,outputVolume,enableScreenshots=0,screenshotScaleFactor=1):
-    """
-    Run the actual algorithm
-    """
-
-    self.delayDisplay('Running the aglorithm')
-
-    self.enableScreenshots = enableScreenshots
-    self.screenshotScaleFactor = screenshotScaleFactor
-
-    self.takeScreenshot('SceneViewer-Start','Start',-1)
-
-    return True
+  def onNodeModified(self,node,eventName):
+    self.reportNode(node)
 
 
 class SceneViewerTest(ScriptedLoadableModuleTest):
@@ -242,26 +322,13 @@ class SceneViewerTest(ScriptedLoadableModuleTest):
     your test should break so they know that the feature is needed.
     """
 
-    self.delayDisplay("Starting the test")
-    #
-    # first, get some data
-    #
-    import urllib
-    downloads = (
-        ('http://slicer.kitware.com/midas3/download?items=5767', 'FA.nrrd', slicer.util.loadVolume),
-        )
+    self.delayDisplay("Starting the test", 50)
 
-    for url,name,loader in downloads:
-      filePath = slicer.app.temporaryPath + '/' + name
-      if not os.path.exists(filePath) or os.stat(filePath).st_size == 0:
-        print('Requesting download %s from %s...\n' % (name, url))
-        urllib.urlretrieve(url, filePath)
-      if loader:
-        print('Loading %s...\n' % (name,))
-        loader(filePath)
-    self.delayDisplay('Finished with download and loading\n')
-
-    volumeNode = slicer.util.getNode(pattern="FA")
     logic = SceneViewerLogic()
-    self.assertTrue( logic.hasImageData(volumeNode) )
+    slicer.modules.SceneViewerWidget.logic = logic
+
+    self.assertTrue(
+      logic.connect(database="sceneviewertest")
+    )
+
     self.delayDisplay('Test passed!')
