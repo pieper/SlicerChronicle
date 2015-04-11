@@ -184,11 +184,13 @@ class SceneViewerLogic(ScriptedLoadableModuleLogic):
       import traceback
       traceback.print_exc()
 
-    # take an initial snapshot of the scene
-    self.reportScene()
-    # observe any changes
-    self.observeScene()
-    return True
+    if self.db:
+      # take an initial snapshot of the scene
+      self.reportScene()
+      # observe any changes
+      self.observeScene()
+
+    return self.db != None
 
   def disconnect(self):
     """Remove all observers and close connection to database"""
