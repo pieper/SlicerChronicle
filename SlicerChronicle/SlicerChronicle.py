@@ -1,5 +1,5 @@
 import unittest
-import os, couchdb, json, urllib, tempfile
+import os, json, urllib, tempfile
 import dicom
 from __main__ import vtk, qt, ctk, slicer
 
@@ -164,6 +164,7 @@ class SlicerChronicleLogic:
     import os
     self.recordPath = os.path.join(os.environ['HOME'], 'chronicle/Chronicle/bin/record.py')
 
+    stub = """
     # connect to the database and register the changes API callback
     self.couch = couchdb.Server(self.couchDB_URL)
     try:
@@ -171,6 +172,7 @@ class SlicerChronicleLogic:
     except Exception, e:
       import traceback
       traceback.print_exc()
+    """
 
   def startStepWatcher(self):
     self.stopStepWatcher()
