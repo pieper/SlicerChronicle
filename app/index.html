@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset='utf-8'>
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+
+    <link rel="stylesheet" type="text/css" href="./css/jquery.dataTables.min.css" media="screen" />
+    <link rel="stylesheet" type="text/css" href="./css/StudyBrowser.css" media="screen" />
+
+    <script src="./jslib/jquery-1.11.3.min.js"></script>
+    <script src="./jslib/jquery.dataTables.min.js"></script>
+    <script src="./jslib/pouchdb-5.1.0.js"></script>
+    <script src="./jslib/pouchdb.memory.js"></script>
+
+    <script>
+      $(document).ready(function() {
+
+        var db = new PouchDB('mydb', {adapter: 'memory'});
+        document.db = db;
+
+        // debug
+        console.log('db', db);
+        db.info().then(function (info) {
+          console.log('info', info);
+        });
+
+        document.changes;
+        document.updateActivityCount = function() {
+          db.info().then(function (info) {
+            $('#count').text("Count: " + String(info.doc_count));
+            document.changes = db.changes({
+              since: 'now',
+              live: false,
+              include_docs: false
+            }).then(function(change) {
+              console.log(change);
+              setTimeout(document.updateActivityCount, 1000);
+            }).catch(function (err) {
+              console.log(err);
+            });
+          }).catch(function(err) {
+            console.log(err);
+          });
+        };
+        document.updateActivityCount();
+
+      });
+    </script>
+
+    <title>Slicer SceneViewer</title>
+
+  </head>
+
+<body>
+
+<header>
+  <div class="container">
+    <h1>Scene activity</h1>
+    <h2>Operations occuring in the 3D Slicer MRML Scene</h2>
+    <p id="count">No events yet</p>
+  </div>
+</header>
+
+<table id="sceneTable" class="display" cellspacing="0" width="100%"> </table>
+
+</body>
+</html>

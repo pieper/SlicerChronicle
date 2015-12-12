@@ -51,14 +51,12 @@ class SceneViewerWidget(ScriptedLoadableModuleWidget):
 #
 
 class SceneViewerLogic(ScriptedLoadableModuleLogic):
-  """Maps mrml scene data and events into couchdb
+  """Maps mrml scene data and events into json
   """
 
   def __init__(self, parent=None):
     ScriptedLoadableModuleLogic.__init__(self,parent)
 
-    self.server = None # couchdb.Server
-    self.database = None # couchdb.Database
     self.sceneObservers = [] # (eventtype, observertag)
     self.nodeObservers = {} # (eventtype, observertag) by node
 
@@ -67,6 +65,8 @@ class SceneViewerLogic(ScriptedLoadableModuleLogic):
     self.helperScene = slicer.vtkMRMLScene()
     self.helperScene.SetSaveToXMLString(1)
     self.helperScene.SetLoadFromXMLString(1)
+
+    self.emitCallback = None
 
   def timeStamp(self):
     """Return a string of the current time with microsecond resolution"""
@@ -78,48 +78,18 @@ class SceneViewerLogic(ScriptedLoadableModuleLogic):
     dateTime = self.timeStamp()
     return "SceneViewer/%s/%s/%s" % (hostname, username, dateTime)
 
-  def connect(self,server='localhost:5984',database=''):
-    """
-    Connects the current mrml scene to the SceneViewer database,
-    which is a coucbdb instance running at server.  Scene information
-    is stored in a database named database or SceneViewer/Hostname/username/DateTime.
-    """
-
-    pass
-    stub = """
-    # connect to couchdb instance and database
-    if database == '':
-      database = self.defaultDatabaseName()
-    if not server.startswith('http://'):
-      server = 'http://'+server
-    self.server = couchdb.Server(server)
-    try:
-      if not database in self.server:
-        self.server.create(database)
-      self.db = self.server[database]
-    except Exception as e:
-      import traceback
-      traceback.print_exc()
-
-    if self.db:
-      # take an initial snapshot of the scene
-      self.reportScene()
-      # observe any changes
-      self.observeScene()
-
-    return self.db != None
-    """
-
   def disconnect(self):
     """Remove all observers and close connection to database"""
     for event,tag in self.sceneObservers:
       slicer.mrmlScene.RemoveObserver(tag)
     for node in self.nodeObservers.keys():
       node.RemoveObserver(self.nodeObservers[node][1])
-    self.database = None
-    self.server = None
     self.sceneObservers = []
     self.nodeObservers = {}
+
+  def emit(self,document):
+    if self.emitCallback:
+      self.emitCallback(document)
 
   def reportScene(self):
     """Record a document to of the current set of nodes of the scene.
@@ -147,7 +117,7 @@ class SceneViewerLogic(ScriptedLoadableModuleLogic):
       '_id' : "nodeSet-"+self.timeStamp(),
       'nodeIDs' : nodeIDsToRecord
     }
-    self.db.save(document)
+    self.emit(document)
 
   def reportNode(self,node):
     copyNode = self.helperScene.CreateNodeByClass(node.GetClassName())
@@ -167,7 +137,7 @@ class SceneViewerLogic(ScriptedLoadableModuleLogic):
       '_id' : node.GetID() + "-" + self.timeStamp(),
       'mrml' : mrml
     }
-    self.db.save(document)
+    self.emit(document)
 
     # TODO:
     # check for storable nodes and check the modified times
@@ -242,39 +212,69 @@ class SceneViewerTest(ScriptedLoadableModuleTest):
     your test should break so they know that the feature is needed.
     """
 
-    self.delayDisplay("Starting the test", 50)
+    self.messageDelay = 50
+    self.delayDisplay("Starting the test")
 
     logic = SceneViewerLogic()
     slicer.modules.SceneViewerWidget.logic = logic
 
-    self.assertTrue(
-      logic.connect(database="sceneviewertest")
-    )
 
     #
     # try pouchdb in QtWebKit
-    # - requires pouch with polyfill for event emitter bind
+    # - requires pouch with polyfill for function bind
     #
-    print('hoot')
-    v = qt.QWebView()
-    v.settings().setAttribute(qt.QWebSettings.DeveloperExtrasEnabled, True)
-    v.settings().setAttribute(qt.QWebSettings.OfflineStorageDatabaseEnabled, True)
-    v.settings().setAttribute(qt.QWebSettings.LocalStorageEnabled, True)
-    v.settings().setAttribute(qt.QWebSettings.LocalContentCanAccessRemoteUrls, True)
-    v.settings().setAttribute(qt.QWebSettings.LocalContentCanAccessFileUrls, True)
-    v.settings().setOfflineStoragePath('/tmp')
+    webView = qt.QWebView()
+    webView.settings().setAttribute(qt.QWebSettings.DeveloperExtrasEnabled, True)
+    webView.settings().setAttribute(qt.QWebSettings.OfflineStorageDatabaseEnabled, True)
+    webView.settings().setAttribute(qt.QWebSettings.LocalStorageEnabled, True)
+    webView.settings().setAttribute(qt.QWebSettings.LocalContentCanAccessRemoteUrls, True)
+    webView.settings().setAttribute(qt.QWebSettings.LocalContentCanAccessFileUrls, True)
+    webView.settings().setOfflineStoragePath('/tmp')
+
+    import os
+    appPath = os.path.join(slicer.modules.sceneviewer.path, "../../app/index.html")
 
     jar = qt.QNetworkCookieJar()
     nam = qt.QNetworkAccessManager()
     nam.setCookieJar(jar)
-    p=v.page()
-    p.setNetworkAccessManager(nam)
-    v.setUrl(qt.QUrl('http://localhost:8000'))
-    v.show()
+    page = webView.page()
+    page.setNetworkAccessManager(nam)
+    mainFrame = page.mainFrame()
+    webView.setUrl(qt.QUrl('file://' + appPath))
+    webView.show()
 
     slicer.util.jar = jar
     slicer.util.nam = nam
-    slicer.util.view = v
+    slicer.util.webView = webView
+    slicer.util.page = webView.page()
 
+    self.delayDisplay('Should have browser window now')
+    page.action(qt.QWebPage.SelectStartOfDocument).trigger()
+
+    slicer.util.inspectAction = page.action(qt.QWebPage.InspectElement)
+    slicer.util.inspectAction.trigger()
+
+    self.delayDisplay('Should have inspector window now')
+
+    databaseName = logic.defaultDatabaseName()
+
+    def storeInPouch(doc):
+      javascriptCode = """
+        document.db.put( %(doc)s ).catch(function (error) {
+          console.log("Error saving to pouchdb", error);
+        });
+      """ % {
+        'doc' : json.dumps(doc)
+      }
+      mainFrame.evaluateJavaScript(javascriptCode)
+
+    logic.emitCallback = storeInPouch
+
+    # take an initial snapshot of the scene
+    logic.reportScene()
+    # observe any changes
+    logic.observeScene()
+
+    mainFrame.evaluateJavaScript("document.db.allDocs({include_docs : true}).then(function(result) {console.log(result);})")
 
     self.delayDisplay('Test passed!')
