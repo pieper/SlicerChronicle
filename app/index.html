@@ -28,6 +28,7 @@
           db.info().then(function (info) {
             $('#count').text("Count: " + String(info.doc_count));
             $('#eventNumber').attr('max', Number(info.doc_count));
+            $('#eventNumber').val(Number(info.doc_count)-1);
           }).catch(function(err) {
             console.log(err);
           });
@@ -59,7 +60,7 @@
 
 
         $('#eventNumber').on('change', function() {
-          document.showDocument({sequenceNumber : Number($('#eventNumber')[0].value)});
+          document.showDocument({sequenceNumber : Number($('#eventNumber').val())});
         });
 
         document.changes = db.changes({
