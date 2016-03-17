@@ -218,11 +218,19 @@ class SceneViewerTest(ScriptedLoadableModuleTest):
     logic = SceneViewerLogic()
     slicer.modules.SceneViewerWidget.logic = logic
 
+    webWindow = qt.QWidget()
+    layout = qt.QVBoxLayout()
+    webWindow.setLayout(layout)
+
+    self.eventCount = 0
+    self.eventCountLabel = qt.QLabel('Event count: 0')
+    layout.addWidget(self.eventCountLabel)
 
     #
     # try pouchdb in QtWebKit
     # - requires pouch with polyfill for function bind
     #
+
     webView = qt.QWebView()
     webView.settings().setAttribute(qt.QWebSettings.DeveloperExtrasEnabled, True)
     webView.settings().setAttribute(qt.QWebSettings.OfflineStorageDatabaseEnabled, True)
@@ -239,13 +247,14 @@ class SceneViewerTest(ScriptedLoadableModuleTest):
     nam.setCookieJar(jar)
     page = webView.page()
     page.setNetworkAccessManager(nam)
-    mainFrame = page.mainFrame()
+    self.mainFrame = page.mainFrame()
     webView.setUrl(qt.QUrl('file://' + appPath))
-    webView.show()
+    layout.addWidget(webView)
+    webWindow.show()
 
     slicer.util.jar = jar
     slicer.util.nam = nam
-    slicer.util.webView = webView
+    slicer.util.webWindow = webWindow
     slicer.util.page = webView.page()
 
     self.delayDisplay('Should have browser window now')
@@ -266,7 +275,9 @@ class SceneViewerTest(ScriptedLoadableModuleTest):
       """ % {
         'doc' : json.dumps(doc)
       }
-      mainFrame.evaluateJavaScript(javascriptCode)
+      self.mainFrame.evaluateJavaScript(javascriptCode)
+      self.eventCount += 1
+      self.eventCountLabel.text = 'Event count: %d' % self.eventCount
 
     logic.emitCallback = storeInPouch
 

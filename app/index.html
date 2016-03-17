@@ -13,37 +13,68 @@
     <script src="./jslib/pouchdb.memory.js"></script>
 
     <script>
+
       $(document).ready(function() {
 
         var db = new PouchDB('mydb', {adapter: 'memory'});
         document.db = db;
 
         // debug
-        console.log('db', db);
         db.info().then(function (info) {
           console.log('info', info);
         });
 
-        document.changes;
         document.updateActivityCount = function() {
           db.info().then(function (info) {
             $('#count').text("Count: " + String(info.doc_count));
-            document.changes = db.changes({
-              since: 'now',
-              live: false,
-              include_docs: false
-            }).then(function(change) {
-              console.log(change);
-              setTimeout(document.updateActivityCount, 1000);
-            }).catch(function (err) {
-              console.log(err);
-            });
+            $('#eventNumber').attr('max', Number(info.doc_count));
           }).catch(function(err) {
             console.log(err);
           });
         };
-        document.updateActivityCount();
 
+        function showMRML(doc) {
+          $('#document').text("Document: " + String(doc.mrml));
+        };
+
+        document.showDocument = function(options) {
+          if (options.id) {
+            db.get(options.id).then(function (doc) {
+              showMRML(doc);
+            }).catch(function(err) {
+              console.log('error fetching', id);
+              console.log(err);
+            });
+          } else if (options.sequenceNumber) {
+            document.changes = db.changes({
+              since: options.sequenceNumber,
+              limit: 1,
+              live: false,
+              include_docs: true
+            }).then(function(result) {
+              showMRML(result.results[0].doc);
+            });
+          }
+        };
+
+
+        $('#eventNumber').on('change', function() {
+          document.showDocument({sequenceNumber : Number($('#eventNumber')[0].value)});
+        });
+
+        document.changes = db.changes({
+          since: 'now',
+          live: true,
+          include_docs: false
+        });
+        document.changes.catch(function (err) {
+          console.log(err);
+        });
+        document.changes.on('change', function(change) {
+          document.updateActivityCount();
+          document.showDocument({id : change.id});
+        });
+        document.updateActivityCount();
       });
     </script>
 
@@ -58,6 +89,8 @@
     <h1>Scene activity</h1>
     <h2>Operations occuring in the 3D Slicer MRML Scene</h2>
     <p id="count">No events yet</p>
+    <input type="range" width="500px" value="0" step="1" id="eventNumber">
+    <p id="document">No document yet</p>
   </div>
 </header>
 
