@@ -3,6 +3,8 @@ import os, json, urllib, tempfile
 import dicom
 from __main__ import vtk, qt, ctk, slicer
 
+import couchdb
+
 #
 # SlicerChronicle
 #
@@ -153,18 +155,20 @@ class SlicerChronicleLogic:
 
     self.operations = {
             "ChronicleStudyRender" : self.chronicleStudyRender,
+            "LesionSegmenter" : self.chronicleLesionSegmenter,
     }
 
     # connect to a local instance of couchdb (must be started externally)
     self.couchDB_URL='http://localhost:5984'
     self.couchDB_URL='http://common.bwh.harvard.edu:5984'
+    self.couchDB_URL='http://quantome.org:5984'
     self.databaseName='chronicle'
+    self.databaseName='segmentation-server'
 
     # path to Chronicle utility source code
     import os
     self.recordPath = os.path.join(os.environ['HOME'], 'chronicle/Chronicle/bin/record.py')
 
-    stub = """
     # connect to the database and register the changes API callback
     self.couch = couchdb.Server(self.couchDB_URL)
     try:
@@ -172,7 +176,6 @@ class SlicerChronicleLogic:
     except Exception, e:
       import traceback
       traceback.print_exc()
-    """
 
   def startStepWatcher(self):
     self.stopStepWatcher()
@@ -190,30 +193,26 @@ class SlicerChronicleLogic:
         doc = db[change['id']]
         if 'type' in doc.keys() and doc['type'] == 'ch.step':
           print(doc)
-          # <Document u'2.25.331237450000223992174473666375979231286'@u'1-d203faeea604bf2690cb26149de46425' {
-          #   u'inputs': [[[u'University of Washington', u'IRL Generic DRO'], [u'(20130528) IRL Generic PET/CT', u'1.3.6.1.4.1.150.2.1.1.2.20130529141416']]],
-          #   u'name': u'Study Render',
-          #   u'parameters': [],
-          #   u'outputs': [],
-          #   u'desiredProvenance': {
-          #     u'application': u'3D Slicer',
-          #     u'operation': u'ChronicleStudyRender',
-          #     u'version': u'4.3*'
-          #   },
-          #   u'type': u'ch.step'
-          # }>
-          #
-          # self.fetchAndLoadSeries(doc['seriesUID'])
-          if self.canPerformStep(doc):
-            operation = doc['desiredProvenance']['operation']
-            print("yes, we can do this!!!")
-            print("let's %s!" % operation)
-            self.operations[operation](doc)
-        else:
-          print("not a series")
+          if 'status' in doc.keys() and doc['status'] == 'open':
+            if self.canPerformStep(doc):
+              operation = doc['desiredProvenance']['operation']
+              print("yes, we can do this!!!")
+              print("let's %s!" % operation)
+              self.operations[operation](doc)
     except Exception, e:
       import traceback
       traceback.print_exc()
+
+  def postStatus(self,status, progressString):
+      print(status, progressString)
+      try:
+        id_, rev = self.db.save({
+          'type' : status,
+          'progress' : progressString,
+        })
+        return (id_,rev)
+      except:
+        print('...failed to save progress!!!')
 
   def canPerformStep(self,stepDoc):
     '''Analyze the step document to see if the current
@@ -223,7 +222,7 @@ class SlicerChronicleLogic:
     import fnmatch
     prov = stepDoc['desiredProvenance']
     applicationMatch = fnmatch.fnmatch("3D Slicer", prov['application'])
-    versionMatch = fnmatch.fnmatch("4.3.1", prov['version'])
+    versionMatch = fnmatch.fnmatch(slicer.app.applicationVersion, prov['version'])
     operationMatch = prov['operation'] in self.operations.keys()
     return (applicationMatch and versionMatch and operationMatch)
 
@@ -251,6 +250,30 @@ class SlicerChronicleLogic:
         print('this is not an instance we can load')
     node = None
     if filesToLoad != []:
+      status, node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
+    return node
+
+  def volumeNodeBySeriesUID(self, inputSeriesUID):
+    """Check to see if the series is already loaded as a node.
+    If not, check in the database and try to load from there"""
+    seriesVolumeNode = None
+
+    return seriesVolumeNode
+
+  def fetchAndLoadInstanceURLs(self,instanceURLs):
+    tmpdir = tempfile.mkdtemp()
+
+    filesToLoad = []
+    for instanceURL in instanceURLs:
+      instanceFileName = "object-%d.dcm" % len(filesToLoad)
+      instanceFilePath = os.path.join(tmpdir, instanceFileName)
+      urllib.urlretrieve(instanceURL, instanceFilePath)
+      filesToLoad.append(instanceFilePath);
+      self.postStatus('progress', "Downloaded %d of %d" % (len(filesToLoad), len(instanceURLs)))
+
+    node = None
+    if filesToLoad != []:
+      self.postStatus('progress', 'loading')
       status, node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
     return node
 
@@ -294,6 +317,44 @@ class SlicerChronicleLogic:
     inputs = stepDoc['inputs']
     for input in inputs:
       self.fetchAndRenderStudy(input)
+
+  def fetchAndSegmentSeries(self,inputInstanceURLs, inputSeriesUID, seedInstance, seed):
+    """Download the study data from given URL and segment based on seed point.
+    Re-upload the result.
+    Currently a demo that depends on having CIP installed.
+    """
+    self.postStatus('progress', 'loading')
+    seriesVolumeNode = self.volumeNodeBySeriesUID(inputSeriesUID)
+    if not seriesVolumeNode:
+      seriesVolumeNode = self.fetchAndLoadInstanceURLs(inputInstanceURLs)
+    if seriesVolumeNode:
+      slicer.util.delayDisplay('got it!')
+    else:
+      self.postStatus('result', 'Could not get access to the series')
+      return
+
+    id_, rev = self.postStatus('progress', 'saving pixmap')
+    pixmap = qt.QPixmap().grabWidget(slicer.util.mainWindow())
+    tmpdir = tempfile.mkdtemp()
+    imagePath = os.path.join(tmpdir,'image.png')
+    pixmap.save(imagePath)
+    doc = self.db.get(id_)
+    fp = open(imagePath,'rb')
+    self.db.put_attachment(doc, fp, "image.png")
+    fp.close()
+    imageURL = self.couch.resource().url + "/" + self.databaseName + "/" + id_ + "/image.png"
+
+    self.postStatus('result', '<img id="resultImage" src="'+imageURL+'">')
+
+  def chronicleLesionSegmenter(self,stepDoc):
+    """Render each study on the input list"""
+    inputInstanceURLs = stepDoc['desiredProvenance']['inputInstanceURLs']
+    inputSeriesUID = stepDoc['desiredProvenance']['inputSeriesUID']
+    seedInstance = stepDoc['desiredProvenance']['seedInstance']
+    seed = stepDoc['desiredProvenance']['seed']
+    self.fetchAndSegmentSeries(inputInstanceURLs, inputSeriesUID, seedInstance, seed)
+    stepDoc['status'] = 'closed'
+    self.db.save(stepDoc)
 
   def saveSliceViews(self,sliceNode,filePath):
     """Frame grab the slice view widgets and save
@@ -572,7 +633,7 @@ class SlicerChronicleTest(unittest.TestCase):
     """
     self.setUp()
     self.test_SlicerChronicleWeb()
-    #self.test_SlicerChronicleLogic()
+    self.test_SlicerChronicleLogic()
 
   def changesCallback(self,db,line):
     try:
@@ -652,6 +713,7 @@ class SlicerChronicleTest(unittest.TestCase):
 
     # connect to a local instance of couchdb (must be started externally)
     couchDB_URL='http://localhost:5984'
+    couchDB_URL='http://quantome.org:5984'
     databaseName='chronicle'
 
     # connect to the database and register the changes API callback
