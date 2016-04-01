@@ -1,9 +1,11 @@
 import unittest
 import os, json, urllib, tempfile
+import couchdb
 import dicom
 from __main__ import vtk, qt, ctk, slicer
+from DICOMLib import DICOMUtils
+from DICOMLib import DICOMDetailsPopup
 
-import couchdb
 
 #
 # SlicerChronicle
@@ -96,7 +98,7 @@ class SlicerChronicleWidget:
     #
     self.stepWatchCheckBox = qt.QCheckBox()
     self.stepWatchCheckBox.checked = 0
-    self.stepWatchCheckBox.setToolTip("When enabled, slicer will watch the chronicle db for new series load commands and will download and open the corresponding data.")
+    self.stepWatchCheckBox.setToolTip("When enabled, slicer will watch the chronicle chronicleDB for new series load commands and will download and open the corresponding data.")
     parametersFormLayout.addRow("Watch for Steps to Process", self.stepWatchCheckBox)
 
     # connections
@@ -172,25 +174,25 @@ class SlicerChronicleLogic:
     # connect to the database and register the changes API callback
     self.couch = couchdb.Server(self.couchDB_URL)
     try:
-      self.db = self.couch[self.databaseName]
+      self.segmentationDB = self.couch[self.databaseName]
     except Exception, e:
       import traceback
       traceback.print_exc()
 
   def startStepWatcher(self):
     self.stopStepWatcher()
-    self.changes = CouchChanges(self.db, self.stepWatcherChangesCallback)
+    self.changes = CouchChanges(self.segmentationDB, self.stepWatcherChangesCallback)
 
   def stopStepWatcher(self):
     if self.changes:
       self.changes.stop()
       self.changes = None
 
-  def stepWatcherChangesCallback(self, db, line):
+  def stepWatcherChangesCallback(self, segmentationDB, line):
     try:
       if line != "":
         change = json.loads(line)
-        doc = db[change['id']]
+        doc = segmentationDB[change['id']]
         if 'type' in doc.keys() and doc['type'] == 'ch.step':
           print(doc)
           if 'status' in doc.keys() and doc['status'] == 'open':
@@ -206,7 +208,7 @@ class SlicerChronicleLogic:
   def postStatus(self,status, progressString):
       print(status, progressString)
       try:
-        id_, rev = self.db.save({
+        id_, rev = self.segmentationDB.save({
           'type' : status,
           'progress' : progressString,
         })
@@ -231,7 +233,7 @@ class SlicerChronicleLogic:
 
     api = "/_design/instances/_view/seriesInstances?reduce=false"
     args = '&key="%s"' % seriesUID
-    seriesInstancesURL = self.db.resource().url + api + args
+    seriesInstancesURL = self.chronicleDB.resource().url + api + args
     urlFile = urllib.urlopen(seriesInstancesURL)
     instancesJSON = urlFile.read()
     instances = json.loads(instancesJSON)
@@ -239,9 +241,9 @@ class SlicerChronicleLogic:
     for instance in instances['rows']:
       classUID,instanceUID = instance['value']
       if classUID in self.imageClasses:
-        doc = self.db[instanceUID]
+        doc = self.chronicleDB[instanceUID]
         print("need to download ", doc['_id'])
-        instanceURL = self.db.resource().url + '/' + doc['_id'] + "/object.dcm"
+        instanceURL = self.chronicleDB.resource().url + '/' + doc['_id'] + "/object.dcm"
         instanceFileName = doc['_id']
         instanceFilePath = os.path.join(tmpdir, instanceFileName)
         urllib.urlretrieve(instanceURL, instanceFilePath)
@@ -253,6 +255,12 @@ class SlicerChronicleLogic:
       status, node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
     return node
 
+  def operatingDICOMDatabase(self,operation):
+    """Specify a database to use for the tagged operation (directory name)"""
+    tempDatabaseDir = slicer.app.temporaryPath + '/' + operation
+    originalDatabaseDirectory = DICOMUtils.openTemporaryDatabase(tempDatabaseDir, absolutePath=True)
+    return originalDatabaseDirectory
+
   def volumeNodeBySeriesUID(self, inputSeriesUID):
     """Check to see if the series is already loaded as a node.
     If not, check in the database and try to load from there"""
@@ -260,22 +268,38 @@ class SlicerChronicleLogic:
 
     return seriesVolumeNode
 
-  def fetchAndLoadInstanceURLs(self,instanceURLs):
+
+  def fetchAndLoadInstanceURLs(self,instanceUIDURLPairs, seriesUID):
     tmpdir = tempfile.mkdtemp()
 
     filesToLoad = []
-    for instanceURL in instanceURLs:
-      instanceFileName = "object-%d.dcm" % len(filesToLoad)
-      instanceFilePath = os.path.join(tmpdir, instanceFileName)
-      urllib.urlretrieve(instanceURL, instanceFilePath)
-      filesToLoad.append(instanceFilePath);
-      self.postStatus('progress', "Downloaded %d of %d" % (len(filesToLoad), len(instanceURLs)))
+    for instanceUID,instanceURL in instanceUIDURLPairs:
+      filePath = slicer.dicomDatabase.fileForInstance(instanceUID)
+      if filePath != '' and os.access(filePath, os.F_OK):
+        self.postStatus('progress', "Already in database: %s as %s" % (instanceUID, filePath))
+      else:
+        instanceFileName = "object-%d.dcm" % len(filesToLoad)
+        instanceFilePath = os.path.join(tmpdir, instanceFileName)
+        filesToLoad.append(instanceFilePath)
+        self.postStatus('progress', "Downloading %s to %s" % (instanceURL, instanceFilePath))
+        urllib.urlretrieve(instanceURL, instanceFilePath)
+        self.postStatus('progress', "Inserting %s" % instanceUID)
+        slicer.dicomDatabase.insert(instanceFilePath)
+      self.postStatus('progress', "Downloaded %d of %d" % (len(filesToLoad), len(instanceUIDURLPairs)))
 
-    node = None
-    if filesToLoad != []:
-      self.postStatus('progress', 'loading')
-      status, node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
-    return node
+    detailsPopup = DICOMDetailsPopup()
+    detailsPopup.offerLoadables(seriesUID, 'Series')
+    detailsPopup.examineForLoading()
+    detailsPopup.loadCheckedLoadables()
+
+    seriesUIDTag = "0020,000e"
+    for volumeNode in slicer.util.getNodes('vtkMRMLScalarVolumeNode*').values():
+      instanceUIDs = volumeNode.GetAttribute('DICOM.instanceUIDs')
+      if instanceUIDs != '':
+        uid0 = instanceUIDs.split()[0]
+        if slicer.dicomDatabase.instanceValue(uid0, seriesUIDTag) == seriesUID:
+          return volumeNode
+    return None
 
   def fetchAndRenderStudy(self,studyKey):
     """Download the study data from chronicle and make
@@ -287,7 +311,7 @@ class SlicerChronicleLogic:
     args += '&startkey=%s' % json.dumps(studyKey)
     studyKey.append({})
     args += '&endkey=%s' % json.dumps(studyKey)
-    seriesListURL = self.db.resource().url + api + args
+    seriesListURL = self.chronicleDB.resource().url + api + args
     studyDescription = studyKey[1][0]
 
     # get the series list and iterate
@@ -318,7 +342,7 @@ class SlicerChronicleLogic:
     for input in inputs:
       self.fetchAndRenderStudy(input)
 
-  def fetchAndSegmentSeries(self,inputInstanceURLs, inputSeriesUID, seedInstance, seed):
+  def fetchAndSegmentSeries(self,instanceUIDURLPairs, inputSeriesUID, seedInstanceUID, seed):
     """Download the study data from given URL and segment based on seed point.
     Re-upload the result.
     Currently a demo that depends on having CIP installed.
@@ -326,35 +350,43 @@ class SlicerChronicleLogic:
     self.postStatus('progress', 'loading')
     seriesVolumeNode = self.volumeNodeBySeriesUID(inputSeriesUID)
     if not seriesVolumeNode:
-      seriesVolumeNode = self.fetchAndLoadInstanceURLs(inputInstanceURLs)
+      seriesVolumeNode = self.fetchAndLoadInstanceURLs(instanceUIDURLPairs, inputSeriesUID)
     if seriesVolumeNode:
       slicer.util.delayDisplay('got it!')
     else:
       self.postStatus('result', 'Could not get access to the series')
       return
 
+    #
+    # for now, just send screenshot
+    #
     id_, rev = self.postStatus('progress', 'saving pixmap')
     pixmap = qt.QPixmap().grabWidget(slicer.util.mainWindow())
     tmpdir = tempfile.mkdtemp()
     imagePath = os.path.join(tmpdir,'image.png')
     pixmap.save(imagePath)
-    doc = self.db.get(id_)
+    doc = self.segmentationDB.get(id_)
     fp = open(imagePath,'rb')
-    self.db.put_attachment(doc, fp, "image.png")
+    self.segmentationDB.put_attachment(doc, fp, "image.png")
     fp.close()
     imageURL = self.couch.resource().url + "/" + self.databaseName + "/" + id_ + "/image.png"
 
     self.postStatus('result', '<img id="resultImage" src="'+imageURL+'">')
 
   def chronicleLesionSegmenter(self,stepDoc):
-    """Render each study on the input list"""
-    inputInstanceURLs = stepDoc['desiredProvenance']['inputInstanceURLs']
+    """Perform the segmentation process based on the data"""
+    inputInstanceUIDURLPairs = stepDoc['desiredProvenance']['inputInstanceUIDURLPairs']
     inputSeriesUID = stepDoc['desiredProvenance']['inputSeriesUID']
-    seedInstance = stepDoc['desiredProvenance']['seedInstance']
+    seedInstanceUID = stepDoc['desiredProvenance']['seedInstanceUID']
     seed = stepDoc['desiredProvenance']['seed']
-    self.fetchAndSegmentSeries(inputInstanceURLs, inputSeriesUID, seedInstance, seed)
+    stepDoc['status'] = 'working'
+    self.segmentationDB.save(stepDoc)
+    originalDatabaseDirectory = self.operatingDICOMDatabase('LesionSegmenter')
+    self.fetchAndSegmentSeries(inputInstanceUIDURLPairs, inputSeriesUID, seedInstanceUID, seed)
+    DICOMUtils.openDatabase(originalDatabaseDirectory)
+
     stepDoc['status'] = 'closed'
-    self.db.save(stepDoc)
+    self.segmentationDB.save(stepDoc)
 
   def saveSliceViews(self,sliceNode,filePath):
     """Frame grab the slice view widgets and save
@@ -398,10 +430,10 @@ class SlicerChronicleLogic:
     #   will be the id used in chronicle
     dataset = dicom.read_file(filePaths[1])
     print('expecting to find', dataset.SOPInstanceUID)
-    doc = self.db.get(dataset.SOPInstanceUID)
+    doc = self.chronicleDB.get(dataset.SOPInstanceUID)
     print('attempting to attache', filePaths[0])
     fp = open(filePaths[0])
-    self.db.put_attachment(doc, fp, 'image.jpg')
+    self.chronicleDB.put_attachment(doc, fp, 'image.jpg')
     fp.close()
 
   def seriesRender(self,seriesVolumeNode,seriesDescription,orientation):
@@ -511,8 +543,8 @@ class SlicerChronicleContext:
   https://github.com/pieper/ch/blob/246a3ab9d7e533f2013b77c4b9afd0124a98b2f3/chlib/context.js#L17-L59
   """
 
-  def __init__(self,db):
-    self.db = db
+  def __init__(self,chronicleDB):
+    self.chronicleDB = chronicleDB
 
     self._commonOptions = {
       'reduce': 'true',
@@ -537,7 +569,7 @@ class SlicerChronicleContext:
     args += '&stale=%s' % options['stale']
 
     # each row is an entry and the key contains the UID and descriptions
-    viewListURL = self.db.resource().url + api + args
+    viewListURL = self.chronicleDB.resource().url + api + args
     urlFile = urllib.urlopen(viewListURL)
     viewListJSON = urlFile.read()
     viewList = json.loads(viewListJSON)
@@ -581,7 +613,7 @@ class SlicerChronicleContext:
     api = "/_design/instances/_view/seriesInstances?reduce=false"
     seriesUID = series[2][2]
     args = '&key="%s"' % seriesUID
-    seriesInstancesURL = self.db.resource().url + api + args
+    seriesInstancesURL = self.chronicleDB.resource().url + api + args
     urlFile = urllib.urlopen(seriesInstancesURL)
     instancesJSON = urlFile.read()
     instances = json.loads(instancesJSON)['rows']
@@ -591,8 +623,8 @@ class SlicerChronicleContext:
     """returns a pydicom dataset for the instance
     """
     classUID,instanceUID = instance['value']
-    doc = self.db[instanceUID]
-    instanceURL = self.db.resource().url + '/' + doc['_id'] + "/object.dcm"
+    doc = self.chronicleDB[instanceUID]
+    instanceURL = self.chronicleDB.resource().url + '/' + doc['_id'] + "/object.dcm"
     instanceFileName = doc['_id']
     tmpdir = tempfile.mkdtemp()
     instanceFilePath = os.path.join(tmpdir, instanceFileName)
@@ -635,13 +667,13 @@ class SlicerChronicleTest(unittest.TestCase):
     self.test_SlicerChronicleWeb()
     self.test_SlicerChronicleLogic()
 
-  def changesCallback(self,db,line):
+  def changesCallback(self,chronicleDB,line):
     try:
       self.noticesReceived.append(line)
-      self.delayDisplay('got "%s" change from %s' % (line,db))
+      self.delayDisplay('got "%s" change from %s' % (line,chronicleDB))
       if line != "":
         change = json.loads(line)
-        doc = db[change['id']]
+        doc = chronicleDB[change['id']]
         self.delayDisplay(doc)
         self.assertTrue('comment' in doc.keys())
     except Exception, e:
@@ -656,7 +688,7 @@ class SlicerChronicleTest(unittest.TestCase):
     self.delayDisplay("Starting the test",100)
 
     logic = SlicerChronicleLogic()
-    context = SlicerChronicleContext(logic.db)
+    context = SlicerChronicleContext(logic.chronicleDB)
 
     # patient
     patients = context.patients()
@@ -718,14 +750,14 @@ class SlicerChronicleTest(unittest.TestCase):
 
     # connect to the database and register the changes API callback
     couch = couchdb.Server(couchDB_URL)
-    db = couch[databaseName]
-    changes = CouchChanges(db, self.changesCallback)
+    chronicleDB = couch[databaseName]
+    changes = CouchChanges(chronicleDB, self.changesCallback)
 
     # insert a document
     document = {
         'comment': 'a test of SlicerChronicle',
     }
-    doc_id, doc_rev = db.save(document)
+    doc_id, doc_rev = chronicleDB.save(document)
     self.delayDisplay("Saved %s,%s" %(doc_id, doc_rev))
 
     # should get a notification of our document, along with two heartbeat messages
