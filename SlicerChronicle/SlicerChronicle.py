@@ -256,10 +256,15 @@ class SlicerChronicleLogic:
     return node
 
   def operatingDICOMDatabase(self,operation):
-    """Specify a database to use for the tagged operation (directory name)"""
+    """Specify a database to use for the tagged operation (directory name)
+    Only open a new one if it differs from the currently selected database
+    """
     tempDatabaseDir = slicer.app.temporaryPath + '/' + operation
-    originalDatabaseDirectory = DICOMUtils.openTemporaryDatabase(tempDatabaseDir, absolutePath=True)
-    return originalDatabaseDirectory
+    if tempDatabaseDir != os.path.split(slicer.dicomDatabase.databaseFilename)[0]:
+      originalDatabaseDirectory = DICOMUtils.openTemporaryDatabase(tempDatabaseDir, absolutePath=True)
+      return originalDatabaseDirectory
+    else:
+      return tempDatabaseDir
 
   def volumeNodeBySeriesUID(self, inputSeriesUID):
     """Check to see if the series is already loaded as a node.
@@ -356,6 +361,33 @@ class SlicerChronicleLogic:
     else:
       self.postStatus('result', 'Could not get access to the series')
       return
+
+    #
+    # calculate the RAS coordinate of the seed and place a fiducial
+    # - seed is in 0-1 slice space of seedInstanceUID
+    #
+    imagePositionPatientTag = '0020,0032'
+    imageOrientationPatientTag = '0020,0037'
+    positionLPS = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imagePositionPatientTag).split('\\'))
+    orientationLPS = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imageOrientationPatientTag).split('\\'))
+    position = [-1. * positionLPS[0], -1. * positionLPS[1], positionLPS[2]]
+
+    # TODO: seed needs to be specified in pixels or original image (or normalized)
+
+    row = [-1. * orientationLPS[0], -1. * orientationLPS[1], orientationLPS[2]]
+    column = [-1. * orientationLPS[3], -1. * orientationLPS[4], orientationLPS[5]]
+    seedRAS = [ position[0] + seed[0] * row[0] + seed[1] * column[0],
+                position[1] + seed[0] * row[1] + seed[1] * column[1],
+                position[2] + seed[0] * row[2] + seed[1] * column[2] ]
+    sliceNodes = slicer.util.getNodes('vtkMRMLSliceNode*')
+    for sliceNode in sliceNodes.values():
+      sliceNode.JumpSliceByCentering(*seedRAS)
+
+    markupsLogic = slicer.modules.markups.logic()
+    fiducialIndex = markupsLogic.AddFiducial(*seedRAS)
+    fiducialID = markupsLogic.GetActiveListID()
+    fiducialNode = slicer.mrmlScene.GetNodeByID(fiducialID)
+    self.postStatus('progress', 'Placed seed at RAS %s' % seedRAS)
 
     #
     # for now, just send screenshot
