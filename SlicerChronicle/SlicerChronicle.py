@@ -364,21 +364,28 @@ class SlicerChronicleLogic:
 
     #
     # calculate the RAS coordinate of the seed and place a fiducial
-    # - seed is in 0-1 slice space of seedInstanceUID
+    # - seed is in 0-1 slice space of seedInstanceUID (origin is upper left)
     #
     imagePositionPatientTag = '0020,0032'
     imageOrientationPatientTag = '0020,0037'
+    rowsTag = '0028,0010'
+    columsTag = '0028,0011'
+    spacingTag = '0028,0030'
     positionLPS = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imagePositionPatientTag).split('\\'))
+    orientationLPS = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imageOrientationPatientTag).split('\\'))
+    spacing = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, spacingTag).split('\\'))
+    rows = float(slicer.dicomDatabase.instanceValue(seedInstanceUID, rowsTag))
+    colums = float(slicer.dicomDatabase.instanceValue(seedInstanceUID, columsTag))
+    pixelSeed = [seed[0] * colums, seed[1] * rows]
     orientationLPS = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imageOrientationPatientTag).split('\\'))
     position = [-1. * positionLPS[0], -1. * positionLPS[1], positionLPS[2]]
 
-    # TODO: seed needs to be specified in pixels or original image (or normalized)
-
-    row = [-1. * orientationLPS[0], -1. * orientationLPS[1], orientationLPS[2]]
-    column = [-1. * orientationLPS[3], -1. * orientationLPS[4], orientationLPS[5]]
-    seedRAS = [ position[0] + seed[0] * row[0] + seed[1] * column[0],
-                position[1] + seed[0] * row[1] + seed[1] * column[1],
-                position[2] + seed[0] * row[2] + seed[1] * column[2] ]
+    # here slice spacing doesn't come into play because seed is in plane of seedInstanceUID
+    row = [-1. * spacing[0] * orientationLPS[0], -1. * spacing[0] * orientationLPS[1], orientationLPS[2]]
+    column = [-1. * spacing[1] * orientationLPS[3], -1. * spacing[1] * orientationLPS[4], orientationLPS[5]]
+    seedRAS = [ position[0] + pixelSeed[0] * row[0] + pixelSeed[1] * column[0],
+                position[1] + pixelSeed[0] * row[1] + pixelSeed[1] * column[1],
+                position[2] + pixelSeed[0] * row[2] + pixelSeed[1] * column[2] ]
     sliceNodes = slicer.util.getNodes('vtkMRMLSliceNode*')
     for sliceNode in sliceNodes.values():
       sliceNode.JumpSliceByCentering(*seedRAS)
