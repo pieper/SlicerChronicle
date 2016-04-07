@@ -396,9 +396,12 @@ class SlicerChronicleLogic:
     fiducialNode = slicer.mrmlScene.GetNodeByID(fiducialID)
     self.postStatus('progress', 'Placed seed at RAS %s' % seedRAS)
 
+
+
     #
     # for now, just send screenshot
     #
+    slicer.util.delayDisplay('Saving Pixmap...', 200)
     id_, rev = self.postStatus('progress', 'saving pixmap')
     pixmap = qt.QPixmap().grabWidget(slicer.util.mainWindow())
     tmpdir = tempfile.mkdtemp()
