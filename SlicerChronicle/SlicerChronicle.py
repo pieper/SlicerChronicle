@@ -300,7 +300,7 @@ class SlicerChronicleLogic:
     seriesUIDTag = "0020,000e"
     for volumeNode in slicer.util.getNodes('vtkMRMLScalarVolumeNode*').values():
       instanceUIDs = volumeNode.GetAttribute('DICOM.instanceUIDs')
-      if instanceUIDs != '':
+      if instanceUIDs and instanceUIDs != '':
         uid0 = instanceUIDs.split()[0]
         if slicer.dicomDatabase.instanceValue(uid0, seriesUIDTag) == seriesUID:
           return volumeNode
