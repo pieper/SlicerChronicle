@@ -458,12 +458,24 @@ class SlicerChronicleLogic:
     EditUtil.exportAsDICOMSEG(seriesVolumeNode)
     self.postStatus('progress', 'Exported SEG to database')
 
+    segmentationFile = None
+    modalityTag = "0008,0060"
+    studyUID = slicer.dicomDatabase.studyForSeries(inputSeriesUID)
+    if studyUID:
+      for serie in slicer.dicomDatabase.seriesForStudy(studyUID):
+        file0 = slicer.dicomDatabase.filesForSeries(serie)[0]
+        if file0:
+          if slicer.dicomDatabase.fileValue(file0, modalityTag) == "SEG":
+            # TODO: delete old SEG objects
+            segmentationFile = file0
+            break
+
     sliceNodes = slicer.util.getNodes('vtkMRMLSliceNode*')
     for sliceNode in sliceNodes.values():
       sliceNode.JumpSliceByCentering(*seedRAS)
 
     #
-    # for now, just send screenshot
+    # attach screenshot and seg object
     #
     slicer.util.delayDisplay('Saving Pixmap...', 200)
     id_, rev = self.postStatus('progress', 'saving pixmap')
@@ -476,8 +488,21 @@ class SlicerChronicleLogic:
     self.segmentationDB.put_attachment(doc, fp, "image.png")
     fp.close()
     imageURL = self.couch.resource().url + "/" + self.databaseName + "/" + id_ + "/image.png"
+    segURL = "Unknown"
+    if segmentationFile:
+      fp = open(segmentationFile,'rb')
+      self.segmentationDB.put_attachment(doc, fp, "object.SEG.dcm")
+      fp.close()
+      segURL = self.couch.resource().url + "/" + self.databaseName + "/" + id_ + "/object.SEG.dcm"
 
-    self.postStatus('result', '<img id="resultImage" src="'+imageURL+'">')
+    html = '''
+        <img id="resultImage" width=200 src="%(imageURL)s">
+        <a href="%(segURL)s">Download Segmentation</a>
+    ''' % {
+          'imageURL' : imageURL,
+          'segURL' : segURL,
+    }
+    self.postStatus('result', html)
 
   def chronicleLesionSegmenter(self,stepDoc):
     """Perform the segmentation process based on the data"""
