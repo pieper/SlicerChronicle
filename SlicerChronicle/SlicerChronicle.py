@@ -5,7 +5,8 @@ import dicom
 from __main__ import vtk, qt, ctk, slicer
 from DICOMLib import DICOMUtils
 from DICOMLib import DICOMDetailsPopup
-
+import EditorLib
+from EditorLib.EditUtil import EditUtil
 
 #
 # SlicerChronicle
@@ -352,12 +353,25 @@ class SlicerChronicleLogic:
     Re-upload the result.
     Currently a demo that depends on having CIP installed.
     """
+
+    try:
+      import CIP_LesionModel
+    except ImportError:
+      self.postStatus('result', 'Lesion segmentation not available')
+      return
+
+    try:
+      slicer.modules.encodeseg
+    except ImportError:
+      self.postStatus('result', 'DICOM SEG encoding not available')
+      return
+
     self.postStatus('progress', 'loading')
     seriesVolumeNode = self.volumeNodeBySeriesUID(inputSeriesUID)
     if not seriesVolumeNode:
       seriesVolumeNode = self.fetchAndLoadInstanceURLs(instanceUIDURLPairs, inputSeriesUID)
     if seriesVolumeNode:
-      slicer.util.delayDisplay('got it!')
+      slicer.util.delayDisplay('got it!',100)
     else:
       self.postStatus('result', 'Could not get access to the series')
       return
@@ -386,9 +400,6 @@ class SlicerChronicleLogic:
     seedRAS = [ position[0] + pixelSeed[0] * row[0] + pixelSeed[1] * column[0],
                 position[1] + pixelSeed[0] * row[1] + pixelSeed[1] * column[1],
                 position[2] + pixelSeed[0] * row[2] + pixelSeed[1] * column[2] ]
-    sliceNodes = slicer.util.getNodes('vtkMRMLSliceNode*')
-    for sliceNode in sliceNodes.values():
-      sliceNode.JumpSliceByCentering(*seedRAS)
 
     markupsLogic = slicer.modules.markups.logic()
     fiducialIndex = markupsLogic.AddFiducial(*seedRAS)
@@ -397,6 +408,59 @@ class SlicerChronicleLogic:
     self.postStatus('progress', 'Placed seed at RAS %s' % seedRAS)
 
 
+    #
+    # Run the lesion segmentation module
+    #
+    lesionLevelsetNode = slicer.mrmlScene.CreateNodeByClass("vtkMRMLScalarVolumeNode")
+    lesionLevelsetNode.SetName('LesionLevelSet')
+    slicer.mrmlScene.AddNode(lesionLevelsetNode)
+
+    parameters = {}
+    print("Calling CLI...")
+    parameters["inputImage"] = seriesVolumeNode.GetID()
+    parameters["outputLevelSet"] = lesionLevelsetNode.GetID()
+    parameters["seedsFiducials"] = fiducialID
+    parameters["maximumRadius"] = 30 ;# TODO: make this a parameter
+    parameters["fullSizeOutput"] = True ;# TODO: what does this mean?
+
+    module = slicer.modules.generatelesionsegmentation
+    self.postStatus('progress', 'Running lesion segmenter')
+    result = slicer.cli.runSync(module, None, parameters)
+    self.postStatus('progress', 'Lesion segmenter completed')
+
+    #
+    # threshold in the Editor
+    #
+    volumesLogic = slicer.modules.volumes.logic()
+    lesionLabelNode = volumesLogic.CreateAndAddLabelVolume( slicer.mrmlScene, lesionLevelsetNode, lesionLevelsetNode.GetName() + '-label' )
+    colorNode = slicer.util.getNode('GenericAnatomyColors')
+    lesionLabelNode.GetDisplayNode().SetAndObserveColorNodeID(colorNode.GetID())
+    selectionNode = slicer.app.applicationLogic().GetSelectionNode()
+    selectionNode.SetReferenceActiveVolumeID( lesionLevelsetNode.GetID() )
+    selectionNode.SetReferenceActiveLabelVolumeID( lesionLabelNode.GetID() )
+    slicer.app.applicationLogic().PropagateVolumeSelection(0)
+
+    slicer.util.selectModule('Editor')
+    slicer.util.delayDisplay('Entered Editor', 100)
+    toolsBox = slicer.modules.EditorWidget.toolsBox
+    helper = slicer.modules.EditorWidget.helper
+    toolsBox.selectEffect('ThresholdEffect')
+    thresholdTool = toolsBox.currentTools[0]
+    thresholdTool.min = 0.
+    thresholdTool.max = lesionLevelsetNode.GetImageData().GetScalarRange()[1]
+    thresholdTool.apply()
+    slicer.util.delayDisplay('Thresholded', 100)
+    toolsBox.selectEffect('DefaultTool')
+
+    lesionLabelNode.SetName(seriesVolumeNode.GetName() + "-label")
+    helper.setVolumes(seriesVolumeNode, lesionLabelNode)
+    helper.structureListWidget.split()
+    EditUtil.exportAsDICOMSEG(seriesVolumeNode)
+    self.postStatus('progress', 'Exported SEG to database')
+
+    sliceNodes = slicer.util.getNodes('vtkMRMLSliceNode*')
+    for sliceNode in sliceNodes.values():
+      sliceNode.JumpSliceByCentering(*seedRAS)
 
     #
     # for now, just send screenshot
