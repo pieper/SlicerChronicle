@@ -1,5 +1,5 @@
 import unittest
-import os, json, urllib, tempfile
+import os, json, urllib, tempfile, md5, logging
 import couchdb
 import dicom
 from __main__ import vtk, qt, ctk, slicer
@@ -7,6 +7,10 @@ from DICOMLib import DICOMUtils
 from DICOMLib import DICOMDetailsPopup
 import EditorLib
 from EditorLib.EditUtil import EditUtil
+
+# global for all demos
+#couchDB_URL='http://quantome.org:5984'
+couchDB_URL='http://localhost:5984'
 
 #
 # SlicerChronicle
@@ -102,8 +106,15 @@ class SlicerChronicleWidget:
     self.stepWatchCheckBox.setToolTip("When enabled, slicer will watch the chronicle chronicleDB for new series load commands and will download and open the corresponding data.")
     parametersFormLayout.addRow("Watch for Steps to Process", self.stepWatchCheckBox)
 
+    # qiicr view demo button
+    self.qiicrViewButton = qt.QPushButton("View Demo")
+    self.stepWatchCheckBox.setToolTip("Run a demo of quantitative imaging results.")
+    parametersFormLayout.addRow("QIICR", self.qiicrViewButton)
+
+
     # connections
     self.stepWatchCheckBox.connect('toggled(bool)', self.toggleStepWatch)
+    self.qiicrViewButton.connect('clicked()', self.qiicrViewDemo)
 
     # Add vertical spacer
     self.layout.addStretch(1)
@@ -121,6 +132,52 @@ class SlicerChronicleWidget:
       self.logic.startStepWatcher()
     else:
       self.logic.stopStepWatcher()
+
+  def qiicrViewDemo(self):
+    """A demo of looking at quantitative imaging results"""
+
+    qiicrIowaURL = "https://s3.amazonaws.com/IsomicsPublic/qiicr-iowa.json"
+    qiicrIowaMD5 = "977e88f901fbd01be275ce9ddce787f5"
+
+    logging.info('downloading qiicrIowa data')
+    urlFile = urllib.urlopen(qiicrIowaURL)
+    qiicrIowaJSON = urlFile.read()
+    md5er = md5.new()
+    md5er.update(qiicrIowaJSON)
+    if qiicrIowaMD5 != md5er.hexdigest():
+      logging.error("Invalid download of qiicrIowaJSON: md5 doesn't match!")
+      logging.error(qiicrIowaMD5 + " does not equal " + md5er.hexdigest() )
+      raise Exception('could not download')
+
+    qiicrIowa = json.loads(qiicrIowaJSON)
+    slicer.modules.qiicrIowa = qiicrIowa
+    logging.info("downloaded qiicrIowa data")
+
+    patientIDs = set()
+    personObserverNames = set()
+    for index in range(len(qiicrIowa)):
+      measurement = qiicrIowa[index]
+      patientIDs.add(measurement['patientID'])
+      personObserverNames.add(measurement['personObserverName'])
+    print(patientIDs)
+    print(personObserverNames)
+
+    # originalDatabaseDirectory = self.logic.operatingDICOMDatabase('qiicrView')
+
+    measurement0 = qiicrIowa[0]
+
+    referencedSegmentSOPInstanceUID = measurement0["referencedSegmentSOPInstanceUID"]
+
+    studyUID = self.logic.studyUIDforInstanceUID(referencedSegmentSOPInstanceUID)
+
+    instanceURLs = self.logic.studyInstanceURLs(studyUID)
+    self.logic.fetchAndIndexInstanceURLs(instanceURLs)
+
+    detailsPopup = DICOMDetailsPopup()
+    detailsPopup.offerLoadables(studyUID, 'Study')
+    detailsPopup.examineForLoading()
+    detailsPopup.loadCheckedLoadables()
+
 
   def onReload(self,moduleName="SlicerChronicle"):
     """Generic reload method for any scripted module.
@@ -153,6 +210,7 @@ class SlicerChronicleLogic:
     self.imageClasses = [
               "1.2.840.10008.5.1.4.1.1.2", # CT Image
               "1.2.840.10008.5.1.4.1.1.4", # MR Image
+              "1.2.840.10008.5.1.4.1.1.128", # PET Image
               ]
     self.changes = None
 
@@ -162,20 +220,23 @@ class SlicerChronicleLogic:
     }
 
     # connect to a local instance of couchdb (must be started externally)
-    self.couchDB_URL='http://localhost:5984'
-    self.couchDB_URL='http://common.bwh.harvard.edu:5984'
-    self.couchDB_URL='http://quantome.org:5984'
-    self.databaseName='chronicle'
-    self.databaseName='segmentation-server'
+    self.chronicleDatabaseName='chronicle'
+    self.segmentationDatabaseName='segmentation-server'
 
     # path to Chronicle utility source code
     import os
     self.recordPath = os.path.join(os.environ['HOME'], 'chronicle/Chronicle/bin/record.py')
 
     # connect to the database and register the changes API callback
-    self.couch = couchdb.Server(self.couchDB_URL)
+    self.couch = couchdb.Server(couchDB_URL)
     try:
-      self.segmentationDB = self.couch[self.databaseName]
+      self.segmentationDB = self.couch[self.segmentationDatabaseName]
+    except Exception, e:
+      import traceback
+      traceback.print_exc()
+
+    try:
+      self.chronicleDB = self.couch[self.chronicleDatabaseName]
     except Exception, e:
       import traceback
       traceback.print_exc()
@@ -229,7 +290,7 @@ class SlicerChronicleLogic:
     operationMatch = prov['operation'] in self.operations.keys()
     return (applicationMatch and versionMatch and operationMatch)
 
-  def fetchAndLoadSeries(self,seriesUID):
+  def fetchAndLoadSeriesArchetype(self,seriesUID):
     tmpdir = tempfile.mkdtemp()
 
     api = "/_design/instances/_view/seriesInstances?reduce=false"
@@ -238,7 +299,10 @@ class SlicerChronicleLogic:
     urlFile = urllib.urlopen(seriesInstancesURL)
     instancesJSON = urlFile.read()
     instances = json.loads(instancesJSON)
+    logging.info("Got the following response for seriesUID " + seriesUID + str(instances))
     filesToLoad = []
+    if len(instances['rows']) == 0:
+      logging.warn("No instances associated with seriesUID %s" % seriesUID)
     for instance in instances['rows']:
       classUID,instanceUID = instance['value']
       if classUID in self.imageClasses:
@@ -250,11 +314,19 @@ class SlicerChronicleLogic:
         urllib.urlretrieve(instanceURL, instanceFilePath)
         filesToLoad.append(instanceFilePath);
       else:
-        print('this is not an instance we can load')
+        print('this instance is not a class we can load: %s' % classUID)
     node = None
     if filesToLoad != []:
       status, node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
     return node
+
+  def fetchAndIndexInstanceURLs(self,instanceURLs):
+    tmpdir = tempfile.mkdtemp()
+    instanceFilePath = os.path.join(tmpdir, 'instance.dcm')
+    for instanceURL in instanceURLs:
+      urllib.urlretrieve(instanceURL, instanceFilePath)
+      self.postStatus('progress', "Inserting %s" % instanceURL)
+      slicer.dicomDatabase.insert(instanceFilePath)
 
   def operatingDICOMDatabase(self,operation):
     """Specify a database to use for the tagged operation (directory name)
@@ -273,7 +345,6 @@ class SlicerChronicleLogic:
     seriesVolumeNode = None
 
     return seriesVolumeNode
-
 
   def fetchAndLoadInstanceURLs(self,instanceUIDURLPairs, seriesUID):
     tmpdir = tempfile.mkdtemp()
@@ -307,6 +378,37 @@ class SlicerChronicleLogic:
           return volumeNode
     return None
 
+  def studyUIDforInstanceUID(self,instanceUID):
+    """Pulls down the instance and gets the studyUID from it"""
+    doc = self.chronicleDB.get(instanceUID)
+    try:
+      return doc['dataset']['0020000D']['Value']
+    except KeyError:
+      return None
+
+  def studyInstanceURLs(self,studyUID):
+    """Return the urls of all instances that have this studyUID"""
+    instanceURLs = []
+    # construct the url to fetch the seriesList for this study
+    api = "/_design/tags/_view/byTagAndValue?reduce=false"
+    studyUIDTag = "0020000D"
+    key = [studyUIDTag, studyUID]
+    args = '&startkey=%s' % json.dumps(key)
+    key.append({})
+    args += '&endkey=%s' % json.dumps(key)
+    instanceListURL = self.chronicleDB.resource().url + api + args
+
+    # get the instance list and iterate
+    # - each row is an instanceUID
+    urlFile = urllib.urlopen(instanceListURL)
+    instanceListJSON = urlFile.read()
+    instanceList = json.loads(instanceListJSON)
+    rows = instanceList['rows']
+    for row in rows:
+      instanceURL = self.chronicleDB.resource().url + "/" + row['id'] + "/object.dcm"
+      instanceURLs.append(instanceURL)
+    return instanceURLs
+
   def fetchAndRenderStudy(self,studyKey):
     """Download the study data from chronicle and make
     a set of secondary captures"""
@@ -333,7 +435,7 @@ class SlicerChronicleLogic:
       seriesUID = row['key'][2][2]
       seriesDescription = row['key'][2][1]
       print(seriesUID + ' should have ' + str(instanceCount) + ' instances' )
-      seriesVolumeNode = self.fetchAndLoadSeries(seriesUID)
+      seriesVolumeNode = self.fetchAndLoadSeriesArchetype(seriesUID)
       if seriesVolumeNode:
           studyVolumeNodes.append(seriesVolumeNode)
           for orientation in orientations:
@@ -351,7 +453,7 @@ class SlicerChronicleLogic:
   def fetchAndSegmentSeries(self,instanceUIDURLPairs, inputSeriesUID, seedInstanceUID, seed):
     """Download the study data from given URL and segment based on seed point.
     Re-upload the result.
-    Currently a demo that depends on having CIP installed.
+    Currently a demo that depends on having CIP and Reporting installed.
     """
 
     try:
@@ -487,13 +589,13 @@ class SlicerChronicleLogic:
     fp = open(imagePath,'rb')
     self.segmentationDB.put_attachment(doc, fp, "image.png")
     fp.close()
-    imageURL = self.couch.resource().url + "/" + self.databaseName + "/" + id_ + "/image.png"
+    imageURL = self.couch.resource().url + "/" + self.segmentationDatabaseName + "/" + id_ + "/image.png"
     segURL = "Unknown"
     if segmentationFile:
       fp = open(segmentationFile,'rb')
       self.segmentationDB.put_attachment(doc, fp, "object.SEG.dcm")
       fp.close()
-      segURL = self.couch.resource().url + "/" + self.databaseName + "/" + id_ + "/object.SEG.dcm"
+      segURL = self.couch.resource().url + "/" + self.segmentationDatabaseName + "/" + id_ + "/object.SEG.dcm"
 
     html = '''
         <img id="resultImage" width=200 src="%(imageURL)s">
@@ -875,13 +977,11 @@ class SlicerChronicleTest(unittest.TestCase):
     self.noticesReceived = []
 
     # connect to a local instance of couchdb (must be started externally)
-    couchDB_URL='http://localhost:5984'
-    couchDB_URL='http://quantome.org:5984'
-    databaseName='chronicle'
+    chronicleDatabaseName='chronicle'
 
     # connect to the database and register the changes API callback
     couch = couchdb.Server(couchDB_URL)
-    chronicleDB = couch[databaseName]
+    chronicleDB = couch[chronicleDatabaseName]
     changes = CouchChanges(chronicleDB, self.changesCallback)
 
     # insert a document
