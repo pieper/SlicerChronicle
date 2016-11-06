@@ -218,6 +218,7 @@ class SlicerChronicleLogic:
             "ChronicleStudyRender" : self.chronicleStudyRender,
             "LesionSegmenter" : self.chronicleLesionSegmenter,
     }
+    self.activeRequestID = None
 
     # connect to a local instance of couchdb (must be started externally)
     self.chronicleDatabaseName='chronicle'
@@ -262,15 +263,18 @@ class SlicerChronicleLogic:
               operation = doc['desiredProvenance']['operation']
               print("yes, we can do this!!!")
               print("let's %s!" % operation)
+              self.activeRequestID = change['id']
               self.operations[operation](doc)
+              self.activeRequestID = None
     except Exception, e:
       import traceback
       traceback.print_exc()
 
   def postStatus(self,status, progressString):
-      print(status, progressString)
+      print(self.activeRequestID, status, progressString)
       try:
         id_, rev = self.segmentationDB.save({
+          'requestID' : self.activeRequestID,
           'type' : status,
           'progress' : progressString,
         })
