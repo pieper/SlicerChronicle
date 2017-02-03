@@ -203,8 +203,10 @@ class SlicerChronicleWidget:
 class SlicerChronicleLogic:
   """
   """
-  def __init__(self,couchDB_URL):
+  def __init__(self,couchDB_URL,chronicleDatabaseName='chronicle', operationDatabaseName='segmentation-server'):
 
+    self.chronicleDatabaseName=chronicleDatabaseName
+    self.operationDatabaseName=operationDatabaseName
     # dicom classes associated with images we can display
     self.imageClasses = [
               "1.2.840.10008.5.1.4.1.1.2", # CT Image
@@ -214,14 +216,12 @@ class SlicerChronicleLogic:
     self.changes = None
 
     self.operations = {
+            "Load" : self.chronicleLoad,
             "ChronicleStudyRender" : self.chronicleStudyRender,
             "LesionSegmenter" : self.chronicleLesionSegmenter,
     }
     self.activeRequestID = None
 
-    # connect to a local instance of couchdb (must be started externally)
-    self.chronicleDatabaseName='chronicle'
-    self.segmentationDatabaseName='segmentation-server'
 
     # path to Chronicle utility source code
     import os
@@ -230,7 +230,7 @@ class SlicerChronicleLogic:
     # connect to the database and register the changes API callback
     self.couch = couchdb.Server(couchDB_URL)
     try:
-      self.segmentationDB = self.couch[self.segmentationDatabaseName]
+      self.operationDB = self.couch[self.operationDatabaseName]
     except Exception, e:
       import traceback
       traceback.print_exc()
@@ -243,18 +243,18 @@ class SlicerChronicleLogic:
 
   def startStepWatcher(self):
     self.stopStepWatcher()
-    self.changes = CouchChanges(self.segmentationDB, self.stepWatcherChangesCallback)
+    self.changes = CouchChanges(self.operationDB, self.stepWatcherChangesCallback)
 
   def stopStepWatcher(self):
     if self.changes:
       self.changes.stop()
       self.changes = None
 
-  def stepWatcherChangesCallback(self, segmentationDB, line):
+  def stepWatcherChangesCallback(self, operationDB, line):
     try:
       if line != "":
         change = json.loads(line)
-        doc = segmentationDB[change['id']]
+        doc = operationDB[change['id']]
         if 'type' in doc.keys() and doc['type'] == 'ch.step':
           print(doc)
           if 'status' in doc.keys() and doc['status'] == 'open':
@@ -272,7 +272,7 @@ class SlicerChronicleLogic:
   def postStatus(self,status, progressString):
       print(self.activeRequestID, status, progressString)
       try:
-        id_, rev = self.segmentationDB.save({
+        id_, rev = self.operationDB.save({
           'requestID' : self.activeRequestID,
           'type' : status,
           'progress' : progressString,
@@ -447,6 +447,37 @@ class SlicerChronicleLogic:
       for orientation in orientations:
         self.studyRender(studyVolumeNodes,studyDescription,orientation=orientation)
 
+  def chronicleLoad(self,stepDoc):
+    """Load the study from inputData
+    Required parts of stepDoc:
+        { "desiredProvenance": {
+               "inputData": [
+                 {
+                   "studyUID": "<studyUID>",
+                   "dataFormat": "zip",
+                   "dataURL": "http://<path to zip file>",
+                   "dataToken": "token",
+                } ] } } """
+    inputData = stepDoc['desiredProvenance']['inputData'][0]
+    if inputData['dataFormat'] != 'zip':
+      print("Cannot load non-zip data")
+      return;
+    zipTmpDir = tempfile.mkdtemp()
+    zipFilePath = os.path.join(zipTmpDir, "study.zip")
+    print('downloading', inputData['dataURL'], zipFilePath)
+    urllib.urlretrieve(inputData['dataURL'], zipFilePath)
+    dicomTmpDir = tempfile.mkdtemp()
+    slicer.app.applicationLogic().Unzip(zipFilePath, dicomTmpDir)
+    print('Unzip', zipFilePath, dicomTmpDir)
+    indexer = ctk.ctkDICOMIndexer()
+    indexer.addDirectory(slicer.dicomDatabase, dicomTmpDir, None)
+    indexer.waitForImportFinished()
+    detailsPopup = DICOMDetailsPopup()
+    detailsPopup.offerLoadables(inputData['studyUID'], 'Study')
+    detailsPopup.examineForLoading()
+    detailsPopup.loadCheckedLoadables()
+
+
   def chronicleStudyRender(self,stepDoc):
     """Render each study on the input list"""
     inputs = stepDoc['inputs']
@@ -588,17 +619,17 @@ class SlicerChronicleLogic:
     tmpdir = tempfile.mkdtemp()
     imagePath = os.path.join(tmpdir,'image.png')
     pixmap.save(imagePath)
-    doc = self.segmentationDB.get(id_)
+    doc = self.operationDB.get(id_)
     fp = open(imagePath,'rb')
-    self.segmentationDB.put_attachment(doc, fp, "image.png")
+    self.operationDB.put_attachment(doc, fp, "image.png")
     fp.close()
-    imageURL = self.couch.resource().url + "/" + self.segmentationDatabaseName + "/" + id_ + "/image.png"
+    imageURL = self.couch.resource().url + "/" + self.operationDatabaseName + "/" + id_ + "/image.png"
     segURL = "Unknown"
     if segmentationFile:
       fp = open(segmentationFile,'rb')
-      self.segmentationDB.put_attachment(doc, fp, "object.SEG.dcm")
+      self.operationDB.put_attachment(doc, fp, "object.SEG.dcm")
       fp.close()
-      segURL = self.couch.resource().url + "/" + self.segmentationDatabaseName + "/" + id_ + "/object.SEG.dcm"
+      segURL = self.couch.resource().url + "/" + self.operationDatabaseName + "/" + id_ + "/object.SEG.dcm"
 
     html = '''
         <img id="resultImage" width=200 src="%(imageURL)s">
@@ -616,13 +647,13 @@ class SlicerChronicleLogic:
     seedInstanceUID = stepDoc['desiredProvenance']['seedInstanceUID']
     seed = stepDoc['desiredProvenance']['seed']
     stepDoc['status'] = 'working'
-    self.segmentationDB.save(stepDoc)
+    self.operationDB.save(stepDoc)
     originalDatabaseDirectory = self.operatingDICOMDatabase('LesionSegmenter')
     self.fetchAndSegmentSeries(inputInstanceUIDURLPairs, inputSeriesUID, seedInstanceUID, seed)
     DICOMUtils.openDatabase(originalDatabaseDirectory)
 
     stepDoc['status'] = 'closed'
-    self.segmentationDB.save(stepDoc)
+    self.operationDB.save(stepDoc)
 
   def saveSliceViews(self,sliceNode,filePath):
     """Frame grab the slice view widgets and save
@@ -1003,5 +1034,43 @@ class SlicerChronicleTest(unittest.TestCase):
     self.delayDisplay("noticesReceived: %s" % self.noticesReceived)
     self.assertTrue(len(self.noticesReceived) >= 3)
 
-
     self.delayDisplay('Test passed!')
+
+
+  def test_chronicleLoad(self):
+    '''
+    import SlicerChronicle; SlicerChronicle.SlicerChronicleTest().test_chronicleLoad()
+    '''
+
+    logic = SlicerChronicleLogic('http://quantome.org:5984', 'chronicle', 'operations')
+    logic.startStepWatcher()
+
+    # connect to the database and register the changes API callback
+    couch = couchdb.Server('http://quantome.org:5984')
+    operationsDB = couch['operations']
+
+    # insert a document
+    url = "https://s3.amazonaws.com/IsomicsPublic/SampleData/QIN-HEADNECK-01-0024-CT.zip"
+    document = {
+       "status": "open",
+       "type": "ch.step",
+       "desiredProvenance": {
+           "operation": "Load",
+           "application": "3D Slicer",
+           "version": "4.*",
+           "inputData": [
+             {
+               "studyUID": "TBD",
+               "dataFormat": "zip",
+               "dataURL": url,
+               "dataToken": "token",
+            }
+          ]
+       }
+    }
+    doc_id, doc_rev = operationsDB.save(document)
+    self.delayDisplay("Saved %s,%s" %(doc_id, doc_rev))
+
+    self.delayDisplay('data should be loaded soon!', 5000)
+
+    logic.stopStepWatcher()
