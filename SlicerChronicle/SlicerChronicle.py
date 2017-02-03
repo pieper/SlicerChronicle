@@ -9,8 +9,7 @@ import EditorLib
 from EditorLib.EditUtil import EditUtil
 
 # global for all demos
-#couchDB_URL='http://quantome.org:5984'
-couchDB_URL='http://localhost:5984'
+default_couchDB_URL='http://quantome.org:5984'
 
 #
 # SlicerChronicle
@@ -122,7 +121,7 @@ class SlicerChronicleWidget:
     # make a copy of the logic, which connects us to the database
     # TODO: we should have an option to pick the server, port, database name, and filter
     # and then match up this with an action to perform
-    self.logic = SlicerChronicleLogic()
+    self.logic = SlicerChronicleLogic(default_couchDB_URL)
 
   def cleanup(self):
     self.logic.stopStepWatcher()
@@ -204,7 +203,7 @@ class SlicerChronicleWidget:
 class SlicerChronicleLogic:
   """
   """
-  def __init__(self):
+  def __init__(self,couchDB_URL):
 
     # dicom classes associated with images we can display
     self.imageClasses = [
@@ -924,7 +923,7 @@ class SlicerChronicleTest(unittest.TestCase):
     """
     self.delayDisplay("Starting the test",100)
 
-    logic = SlicerChronicleLogic()
+    logic = SlicerChronicleLogic(default_couchDB_URL)
     context = SlicerChronicleContext(logic.chronicleDB)
 
     # patient
@@ -984,7 +983,7 @@ class SlicerChronicleTest(unittest.TestCase):
     chronicleDatabaseName='chronicle'
 
     # connect to the database and register the changes API callback
-    couch = couchdb.Server(couchDB_URL)
+    couch = couchdb.Server(default_couchDB_URL)
     chronicleDB = couch[chronicleDatabaseName]
     changes = CouchChanges(chronicleDB, self.changesCallback)
 
