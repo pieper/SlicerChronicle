@@ -1072,8 +1072,5 @@ class SlicerChronicleTest(unittest.TestCase):
        }
     }
     doc_id, doc_rev = operationsDB.save(document)
-    self.delayDisplay("Saved %s,%s" %(doc_id, doc_rev))
-
-    self.delayDisplay('data should be loaded soon!', 5000)
 
     logic.stopStepWatcher()
