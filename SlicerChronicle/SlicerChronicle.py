@@ -447,6 +447,12 @@ class SlicerChronicleLogic:
       for orientation in orientations:
         self.studyRender(studyVolumeNodes,studyDescription,orientation=orientation)
 
+  def indexDICOMDirectory(self,path):
+    for root, subFolders, files in os.walk(path):
+      for file_ in files:
+        filePath = os.path.join(root,file_)
+        slicer.dicomDatabase.insert(filePath)
+
   def chronicleLoad(self,stepDoc):
     """Load the study from inputData
     Required parts of stepDoc:
@@ -469,9 +475,7 @@ class SlicerChronicleLogic:
     dicomTmpDir = tempfile.mkdtemp()
     slicer.app.applicationLogic().Unzip(zipFilePath, dicomTmpDir)
     print('Unzip', zipFilePath, dicomTmpDir)
-    indexer = ctk.ctkDICOMIndexer()
-    indexer.addDirectory(slicer.dicomDatabase, dicomTmpDir, None)
-    indexer.waitForImportFinished()
+    self.indexDICOMDirectory(dicomTmpDir)
     detailsPopup = DICOMDetailsPopup()
     detailsPopup.offerLoadables(inputData['studyUID'], 'Study')
     detailsPopup.examineForLoading()
@@ -1050,7 +1054,6 @@ class SlicerChronicleTest(unittest.TestCase):
     operationsDB = couch['operations']
 
     # insert a document
-    url = "https://s3.amazonaws.com/IsomicsPublic/SampleData/QIN-HEADNECK-01-0024-CT.zip"
     document = {
        "status": "open",
        "type": "ch.step",
@@ -1060,9 +1063,9 @@ class SlicerChronicleTest(unittest.TestCase):
            "version": "4.*",
            "inputData": [
              {
-               "studyUID": "TBD",
+               "studyUID": "1.3.6.1.4.1.14519.5.2.1.2744.7002.271803936741289691489150315969",
                "dataFormat": "zip",
-               "dataURL": url,
+               "dataURL": "https://s3.amazonaws.com/IsomicsPublic/SampleData/QIN-HEADNECK-01-0024-CT.zip",
                "dataToken": "token",
             }
           ]
