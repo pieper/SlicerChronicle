@@ -464,6 +464,7 @@ class SlicerChronicleLogic:
                    "dataURL": "http://<path to zip file>",
                    "dataToken": "token",
                 } ] } } """
+    slicer.util.delayDisplay('Processing load request...')
     inputData = stepDoc['desiredProvenance']['inputData'][0]
     if inputData['dataFormat'] != 'zip':
       print("Cannot load non-zip data")
@@ -1072,5 +1073,6 @@ class SlicerChronicleTest(unittest.TestCase):
        }
     }
     doc_id, doc_rev = operationsDB.save(document)
+    slicer.util.delayDisplay('Submitting request...',100)
 
-    logic.stopStepWatcher()
+    qt.QTimer.singleShot(1000,logic.stopStepWatcher)
