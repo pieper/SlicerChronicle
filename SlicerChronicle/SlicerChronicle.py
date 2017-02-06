@@ -464,7 +464,7 @@ class SlicerChronicleLogic:
                    "dataURL": "http://<path to zip file>",
                    "dataToken": "token",
                 } ] } } """
-    slicer.util.delayDisplay('Processing load request...')
+    slicer.util.showStatusMessage('Processing load request...')
     inputData = stepDoc['desiredProvenance']['inputData'][0]
     if inputData['dataFormat'] != 'zip':
       print("Cannot load non-zip data")
@@ -472,15 +472,20 @@ class SlicerChronicleLogic:
     zipTmpDir = tempfile.mkdtemp()
     zipFilePath = os.path.join(zipTmpDir, "study.zip")
     print('downloading', inputData['dataURL'], zipFilePath)
+    slicer.util.showStatusMessage('Downloading study zip...')
     urllib.urlretrieve(inputData['dataURL'], zipFilePath)
     dicomTmpDir = tempfile.mkdtemp()
     slicer.app.applicationLogic().Unzip(zipFilePath, dicomTmpDir)
+    slicer.util.showStatusMessage('Unzipping study...')
     print('Unzip', zipFilePath, dicomTmpDir)
+    slicer.util.showStatusMessage('Processing DICOM...')
     self.indexDICOMDirectory(dicomTmpDir)
     detailsPopup = DICOMDetailsPopup()
     detailsPopup.offerLoadables(inputData['studyUID'], 'Study')
     detailsPopup.examineForLoading()
+    slicer.util.showStatusMessage('Loading Study...')
     detailsPopup.loadCheckedLoadables()
+    slicer.util.showStatusMessage('Study Loaded...')
 
 
   def chronicleStudyRender(self,stepDoc):
