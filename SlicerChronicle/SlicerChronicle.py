@@ -477,7 +477,7 @@ class SlicerChronicleLogic:
     try:
       import requests
       headers = {}
-      #headers['Authorization'] = 'bearer ' + inputData['dataToken']
+      headers['Authorization'] = 'bearer ' + inputData['dataToken']
       response = requests.get(inputData['dataURL'], headers=headers)
       chunkCount = 0
       if(response.ok):
@@ -1095,6 +1095,23 @@ class SlicerChronicleTest(unittest.TestCase):
           ]
        }
     }
+    document = {
+       "status": "open",
+       "type": "ch.step",
+       "desiredProvenance": {
+           "operation": "Load",
+           "application": "3D Slicer",
+           "version": "4.*",
+           "inputData": [
+             {
+               "studyUID": "2.14.22.1.488611267051454857277203743926733063549507",
+               "dataFormat": "zip",
+               "dataURL": "https://instanceaccess-service-teamplay-himss-us-east.azurewebsites.net/api/pic/DownloadStudy/DownloadStudyZip?tenantId=2&userId=c2FyYWguZmllbGRzQHdpbmR5dmFsbGV5LmNvbQ==&studyTenantId=3&uniqueStudyId=3362&studyInstanceUid=2.14.22.1.488611267051454857277203743926733063549507",
+               "dataToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8yMDAwLzA5L3htbGRzaWcjcnNhLXNoYTEifQ.eyJ1cG4iOiJzYXJhaC5maWVsZHNAd2luZHl2YWxsZXkuY29tIiwiVGVuYW50SWQiOiIyIiwiVUlkIjoiN2EyOTg5MWMtZGY4MC00ODFiLWE0NmYtZjcyODlkMTQ0YzkwIiwicm9sZSI6Ikluc3RpdHV0aW9uQWRtaW4iLCJUZW5hbnRTZXJpYWxOdW1iZXIiOiIxMTA2NDQyMC0xMDAxMDAiLCJpc3MiOiJ0ZWFtcGxheSBBdXRoIFNlcnZlciIsImF1ZCI6InRlYW1wbGF5IFdlYiBDbGllbnQiLCJleHAiOjE0ODY0MDAzODgsIm5iZiI6MTQ4NjM5ODg4OH0.tiJoIcqb7DDYvn-CEU7XdyWMDAUNHmzXARYdwDsZyZ0v-9lA6a5Rxv0FlS28VStY-2ANJ1FeekBgBzVisoi1xwq98Hv018_Sw_IsLelWPlgbxjFDfY5WfPSinY6nibTrNFl4neJRPRXJK0hWla4VT_qC1TuiPS2l2b1dN14MtjQPEroi9ODQ71927MgEUfLEb6gZrXbdPnXersFUMku2pTyB2Lgf21zBo7_OjNxGTbewce_2PbTu9RVi8hVk48Wx6dvQ2AFks0jkmA_zyMeFgUX5p8W9zTIHtl2oVxjBk4SE7oFepm-xsVk36xg7JT53uKppnUgN4VOyr5ZSUddA8nCu_R2rYKDO2esEZa0EH5gUZxVYUPYpjpqSQdEbgVlTPkxMdf8eclQP-MrqG_Zt5TisvB150kJN9ariiqFeKVYLzWXxq4BLdKSLpwtdRHHXLg5XmJmlplZ8LUZryJojXoGcMqauX1xUyjTtUFI-En6otomMhhmjnKLJaiVq_xF-",}
+          ]
+       }
+    }
+
     doc_id, doc_rev = operationsDB.save(document)
     slicer.util.delayDisplay('Submitting request...',100)
 
