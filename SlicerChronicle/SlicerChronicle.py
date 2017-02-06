@@ -473,7 +473,25 @@ class SlicerChronicleLogic:
     zipFilePath = os.path.join(zipTmpDir, "study.zip")
     print('downloading', inputData['dataURL'], zipFilePath)
     slicer.util.showStatusMessage('Downloading study zip...')
-    urllib.urlretrieve(inputData['dataURL'], zipFilePath)
+
+    try:
+      import requests
+      headers = {}
+      #headers['Authorization'] = 'bearer ' + inputData['dataToken']
+      response = requests.get(inputData['dataURL'], headers=headers)
+      chunkCount = 0
+      if(response.ok):
+        with open(zipFilePath, 'wb') as fd:
+          for chunk in response.iter_content(chunk_size=1024*128):
+            fd.write(chunk)
+            slicer.util.showStatusMessage('Downloading chunk %d...' % chunkCount)
+            chunkCount += 1
+      else:
+        slicer.util.showStatusMessage('Could not download')
+        return
+    except ImportError:
+      urllib.urlretrieve(inputData['dataURL'], zipFilePath)
+
     dicomTmpDir = tempfile.mkdtemp()
     slicer.app.applicationLogic().Unzip(zipFilePath, dicomTmpDir)
     slicer.util.showStatusMessage('Unzipping study...')
