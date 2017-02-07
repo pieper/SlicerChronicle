@@ -477,7 +477,8 @@ class SlicerChronicleLogic:
     try:
       import requests
       headers = {}
-      headers['Authorization'] = 'bearer ' + inputData['dataToken']
+      if inputData['dataToken'] != "":
+        headers['Authorization'] = 'bearer ' + inputData['dataToken']
       response = requests.get(inputData['dataURL'], headers=headers)
       chunkCount = 0
       if(response.ok):
@@ -487,6 +488,7 @@ class SlicerChronicleLogic:
             slicer.util.showStatusMessage('Downloading chunk %d...' % chunkCount)
             chunkCount += 1
       else:
+        print(response.reason)
         slicer.util.showStatusMessage('Could not download')
         return
     except ImportError:
@@ -1077,7 +1079,7 @@ class SlicerChronicleTest(unittest.TestCase):
     couch = couchdb.Server('http://quantome.org:5984')
     operationsDB = couch['operations']
 
-    # insert a document
+    # a representative document that should always load
     document = {
        "status": "open",
        "type": "ch.step",
@@ -1087,15 +1089,17 @@ class SlicerChronicleTest(unittest.TestCase):
            "version": "4.*",
            "inputData": [
              {
+               "user": "c2FyYWguZmllbGRzQHdpbmR5dmFsbGV5LmNvbQ==",
                "studyUID": "1.3.6.1.4.1.14519.5.2.1.2744.7002.271803936741289691489150315969",
                "dataFormat": "zip",
                "dataURL": "https://s3.amazonaws.com/IsomicsPublic/SampleData/QIN-HEADNECK-01-0024-CT.zip",
-               "dataToken": "token",
+               "dataToken": "",
             }
           ]
        }
     }
-    document = {
+    # this one worked during the 25 minute window when the dataToken was valid
+    exampleTeamplayDocument = {
        "status": "open",
        "type": "ch.step",
        "desiredProvenance": {
@@ -1111,6 +1115,11 @@ class SlicerChronicleTest(unittest.TestCase):
           ]
        }
     }
+
+    exampleTeamplayUsers = """
+Sarah Fields: c2FyYWguZmllbGRzQHdpbmR5dmFsbGV5LmNvbQ==
+Chris Winter: Y2hyaXMud2ludGVyQG1vdW50YWluc3ByaW5ncy5jb20=
+"""
 
     doc_id, doc_rev = operationsDB.save(document)
     slicer.util.delayDisplay('Submitting request...',100)
