@@ -464,11 +464,16 @@ class SlicerChronicleLogic:
                    "dataURL": "http://<path to zip file>",
                    "dataToken": "token",
                 } ] } } """
-    slicer.util.showStatusMessage('Processing load request...')
     inputData = stepDoc['desiredProvenance']['inputData'][0]
     if inputData['dataFormat'] != 'zip':
       print("Cannot load non-zip data")
       return;
+    if 'CHRONICLE_USER' in os.environ and 'user' in inputData:
+      if os.environ['CHRONICLE_USER'] != inputData['user']:
+        print("Skipping request for other user")
+        return;
+
+    slicer.util.showStatusMessage('Processing load request...')
     zipTmpDir = tempfile.mkdtemp()
     zipFilePath = os.path.join(zipTmpDir, "study.zip")
     print('downloading', inputData['dataURL'], zipFilePath)
