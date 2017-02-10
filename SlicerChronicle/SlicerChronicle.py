@@ -506,11 +506,10 @@ class SlicerChronicleLogic:
     self.indexDICOMDirectory(dicomTmpDir)
 
     slicer.util.showStatusMessage('Loading Study...')
-    seriesUIDs = slicer.dicomDatabase.seriesForStudy(inputData['studyUID'])
-    dicomWidget = slicer.modules.dicom.widgetRepresentation().self()
-    dicomWidget.detailsPopup.offerLoadables(seriesUIDs, 'SeriesUIDList')
-    dicomWidget.detailsPopup.examineForLoading()
-    dicomWidget.detailsPopup.loadCheckedLoadables()
+    detailsPopup = DICOMDetailsPopup()
+    detailsPopup.offerLoadables(inputData['studyUID'], 'Study')
+    detailsPopup.examineForLoading()
+    detailsPopup.loadCheckedLoadables()
 
     slicer.util.showStatusMessage('Cleaning up...')
     os.remove(zipFilePath)
