@@ -172,15 +172,10 @@ class SlicerChronicleWidget:
     instanceURLs = self.logic.studyInstanceURLs(studyUID)
     self.logic.fetchAndIndexInstanceURLs(instanceURLs)
 
-    #detailsPopup = DICOMDetailsPopup()
-    #detailsPopup.offerLoadables(studyUID, 'Study')
-    #detailsPopup.examineForLoading()
-    #detailsPopup.loadCheckedLoadables()
-    seriesUIDs = slicer.dicomDatabase.seriesForStudy(studyUID)
-    dicomWidget = slicer.modules.dicom.widgetRepresentation().self()
-    dicomWidget.detailsPopup.offerLoadables(seriesUIDs, 'SeriesUIDList')
-    dicomWidget.detailsPopup.examineForLoading()
-    dicomWidget.detailsPopup.loadCheckedLoadables()
+    detailsPopup = DICOMDetailsPopup()
+    detailsPopup.offerLoadables(studyUID, 'Study')
+    detailsPopup.examineForLoading()
+    detailsPopup.loadCheckedLoadables()
 
   def onReload(self,moduleName="SlicerChronicle"):
     """Generic reload method for any scripted module.
@@ -509,12 +504,20 @@ class SlicerChronicleLogic:
     print('Unzip', zipFilePath, dicomTmpDir)
     slicer.util.showStatusMessage('Processing DICOM...')
     self.indexDICOMDirectory(dicomTmpDir)
-    detailsPopup = DICOMDetailsPopup()
-    detailsPopup.offerLoadables(inputData['studyUID'], 'Study')
-    detailsPopup.examineForLoading()
+
     slicer.util.showStatusMessage('Loading Study...')
-    detailsPopup.loadCheckedLoadables()
-    slicer.util.showStatusMessage('Study Loaded...')
+    seriesUIDs = slicer.dicomDatabase.seriesForStudy(studyUID)
+    dicomWidget = slicer.modules.dicom.widgetRepresentation().self()
+    dicomWidget.detailsPopup.offerLoadables(seriesUIDs, 'SeriesUIDList')
+    dicomWidget.detailsPopup.examineForLoading()
+    dicomWidget.detailsPopup.loadCheckedLoadables()
+
+    slicer.util.showStatusMessage('Cleaning up...')
+    os.remove(zipFilePath)
+    import shutil
+    shutil.rmtree(dicomTmpDir)
+
+    slicer.util.showStatusMessage('Study Loaded.')
 
     slicer.util.selectModule('SubjectHierarchy')
 
