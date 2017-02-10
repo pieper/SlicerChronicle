@@ -472,9 +472,7 @@ class SlicerChronicleLogic:
         print("Skipping request for other user")
         return;
 
-    dialog = qt.QProgressDialog()
-    dialog.setLabelText('Processing study from load request...')
-    dialog.show()
+    slicer.util.delayDisplay('Processing study from load request...')
     slicer.util.showStatusMessage('Processing load request...')
     zipTmpDir = tempfile.mkdtemp()
     zipFilePath = os.path.join(zipTmpDir, "study.zip")
@@ -496,7 +494,6 @@ class SlicerChronicleLogic:
             chunkCount += 1
       else:
         print(response.reason)
-        dialog.setLabelText('Could not download.')
         slicer.util.showStatusMessage('Could not download')
         return
     except ImportError:
@@ -523,7 +520,6 @@ class SlicerChronicleLogic:
     slicer.util.showStatusMessage('Study Loaded.')
 
     slicer.util.selectModule('SubjectHierarchy')
-    dialog.hide()
 
 
   def chronicleStudyRender(self,stepDoc):
