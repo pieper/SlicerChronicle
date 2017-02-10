@@ -506,7 +506,7 @@ class SlicerChronicleLogic:
     self.indexDICOMDirectory(dicomTmpDir)
 
     slicer.util.showStatusMessage('Loading Study...')
-    seriesUIDs = slicer.dicomDatabase.seriesForStudy(studyUID)
+    seriesUIDs = slicer.dicomDatabase.seriesForStudy(inputData['studyUID'])
     dicomWidget = slicer.modules.dicom.widgetRepresentation().self()
     dicomWidget.detailsPopup.offerLoadables(seriesUIDs, 'SeriesUIDList')
     dicomWidget.detailsPopup.examineForLoading()
