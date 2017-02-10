@@ -512,6 +512,8 @@ class SlicerChronicleLogic:
     detailsPopup.loadCheckedLoadables()
     slicer.util.showStatusMessage('Study Loaded...')
 
+    slicer.util.selectModule('SubjectHierarchy')
+
 
   def chronicleStudyRender(self,stepDoc):
     """Render each study on the input list"""
@@ -1094,7 +1096,6 @@ class SlicerChronicleTest(unittest.TestCase):
            "version": "4.*",
            "inputData": [
              {
-               "user": "c2FyYWguZmllbGRzQHdpbmR5dmFsbGV5LmNvbQ==",
                "studyUID": "1.3.6.1.4.1.14519.5.2.1.2744.7002.271803936741289691489150315969",
                "dataFormat": "zip",
                "dataURL": "https://s3.amazonaws.com/IsomicsPublic/SampleData/QIN-HEADNECK-01-0024-CT.zip",
