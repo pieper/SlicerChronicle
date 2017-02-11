@@ -105,15 +105,8 @@ class SlicerChronicleWidget:
     self.stepWatchCheckBox.setToolTip("When enabled, slicer will watch the chronicle chronicleDB for new series load commands and will download and open the corresponding data.")
     parametersFormLayout.addRow("Watch for Steps to Process", self.stepWatchCheckBox)
 
-    # qiicr view demo button
-    self.qiicrViewButton = qt.QPushButton("View Demo")
-    self.stepWatchCheckBox.setToolTip("Run a demo of quantitative imaging results.")
-    parametersFormLayout.addRow("QIICR", self.qiicrViewButton)
-
-
     # connections
     self.stepWatchCheckBox.connect('toggled(bool)', self.toggleStepWatch)
-    self.qiicrViewButton.connect('clicked()', self.qiicrViewDemo)
 
     # Add vertical spacer
     self.layout.addStretch(1)
@@ -131,51 +124,6 @@ class SlicerChronicleWidget:
       self.logic.startStepWatcher()
     else:
       self.logic.stopStepWatcher()
-
-  def qiicrViewDemo(self):
-    """A demo of looking at quantitative imaging results"""
-
-    qiicrIowaURL = "https://s3.amazonaws.com/IsomicsPublic/qiicr-iowa.json"
-    qiicrIowaMD5 = "977e88f901fbd01be275ce9ddce787f5"
-
-    logging.info('downloading qiicrIowa data')
-    urlFile = urllib.urlopen(qiicrIowaURL)
-    qiicrIowaJSON = urlFile.read()
-    md5er = md5.new()
-    md5er.update(qiicrIowaJSON)
-    if qiicrIowaMD5 != md5er.hexdigest():
-      logging.error("Invalid download of qiicrIowaJSON: md5 doesn't match!")
-      logging.error(qiicrIowaMD5 + " does not equal " + md5er.hexdigest() )
-      raise Exception('could not download')
-
-    qiicrIowa = json.loads(qiicrIowaJSON)
-    slicer.modules.qiicrIowa = qiicrIowa
-    logging.info("downloaded qiicrIowa data")
-
-    patientIDs = set()
-    personObserverNames = set()
-    for index in range(len(qiicrIowa)):
-      measurement = qiicrIowa[index]
-      patientIDs.add(measurement['patientID'])
-      personObserverNames.add(measurement['personObserverName'])
-    print(patientIDs)
-    print(personObserverNames)
-
-    # originalDatabaseDirectory = self.logic.operatingDICOMDatabase('qiicrView')
-
-    measurement0 = qiicrIowa[0]
-
-    referencedSegmentSOPInstanceUID = measurement0["referencedSegmentSOPInstanceUID"]
-
-    studyUID = self.logic.studyUIDforInstanceUID(referencedSegmentSOPInstanceUID)
-
-    instanceURLs = self.logic.studyInstanceURLs(studyUID)
-    self.logic.fetchAndIndexInstanceURLs(instanceURLs)
-
-    detailsPopup = DICOMDetailsPopup()
-    detailsPopup.offerLoadables(studyUID, 'Study')
-    detailsPopup.examineForLoading()
-    detailsPopup.loadCheckedLoadables()
 
   def onReload(self,moduleName="SlicerChronicle"):
     """Generic reload method for any scripted module.
