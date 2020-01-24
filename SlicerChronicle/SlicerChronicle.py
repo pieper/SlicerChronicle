@@ -1,15 +1,16 @@
 import unittest
-import os, json, urllib, tempfile, md5, logging
+import os, json, urllib.request, urllib.parse, urllib.error, tempfile, logging
 import couchdb
-import dicom
+import pydicom
 from __main__ import vtk, qt, ctk, slicer
 from DICOMLib import DICOMUtils
-from DICOMLib import DICOMDetailsPopup
+#from DICOMLib import DICOMDetailsPopup
 import EditorLib
 from EditorLib.EditUtil import EditUtil
 
 # global for all demos
-default_couchDB_URL='http://quantome.org:5984'
+# default_couchDB_URL='http://quantome.org:5984'
+default_couchDB_URL='http://localhost:5984'
 
 #
 # SlicerChronicle
@@ -137,7 +138,7 @@ class SlicerChronicleWidget:
       evalString = 'globals()["%s"].%sTest()' % (moduleName, moduleName)
       tester = eval(evalString)
       tester.runTest()
-    except Exception, e:
+    except Exception as e:
       import traceback
       traceback.print_exc()
       qt.QMessageBox.warning(slicer.util.mainWindow(),
@@ -178,13 +179,13 @@ class SlicerChronicleLogic:
     self.couch = couchdb.Server(couchDB_URL)
     try:
       self.operationDB = self.couch[self.operationDatabaseName]
-    except Exception, e:
+    except Exception as e:
       import traceback
       traceback.print_exc()
 
     try:
       self.chronicleDB = self.couch[self.chronicleDatabaseName]
-    except Exception, e:
+    except Exception as e:
       import traceback
       traceback.print_exc()
 
@@ -202,9 +203,9 @@ class SlicerChronicleLogic:
       if line != "":
         change = json.loads(line)
         doc = operationDB[change['id']]
-        if 'type' in doc.keys() and doc['type'] == 'ch.step':
+        if 'type' in list(doc.keys()) and doc['type'] == 'ch.step':
           print(doc)
-          if 'status' in doc.keys() and doc['status'] == 'open':
+          if 'status' in list(doc.keys()) and doc['status'] == 'open':
             if self.canPerformStep(doc):
               operation = doc['desiredProvenance']['operation']
               print("yes, we can do this!!!")
@@ -212,12 +213,12 @@ class SlicerChronicleLogic:
               self.activeRequestID = change['id']
               self.operations[operation](doc)
               self.activeRequestID = None
-    except Exception, e:
+    except Exception as e:
       import traceback
       traceback.print_exc()
 
   def postStatus(self,status, progressString):
-      print(self.activeRequestID, status, progressString)
+      print((self.activeRequestID, status, progressString))
       try:
         id_, rev = self.operationDB.save({
           'requestID' : self.activeRequestID,
@@ -237,7 +238,7 @@ class SlicerChronicleLogic:
     prov = stepDoc['desiredProvenance']
     applicationMatch = fnmatch.fnmatch("3D Slicer", prov['application'])
     versionMatch = fnmatch.fnmatch(slicer.app.applicationVersion, prov['version'])
-    operationMatch = prov['operation'] in self.operations.keys()
+    operationMatch = prov['operation'] in list(self.operations.keys())
     return (applicationMatch and versionMatch and operationMatch)
 
   def fetchAndLoadSeriesArchetype(self,seriesUID):
@@ -246,7 +247,7 @@ class SlicerChronicleLogic:
     api = "/_design/instances/_view/seriesInstances?reduce=false"
     args = '&key="%s"' % seriesUID
     seriesInstancesURL = self.chronicleDB.resource().url + api + args
-    urlFile = urllib.urlopen(seriesInstancesURL)
+    urlFile = urllib.request.urlopen(seriesInstancesURL)
     instancesJSON = urlFile.read()
     instances = json.loads(instancesJSON)
     logging.info("Got the following response for seriesUID " + seriesUID + str(instances))
@@ -257,14 +258,14 @@ class SlicerChronicleLogic:
       classUID,instanceUID = instance['value']
       if classUID in self.imageClasses:
         doc = self.chronicleDB[instanceUID]
-        print("need to download ", doc['_id'])
+        print(("need to download ", doc['_id']))
         instanceURL = self.chronicleDB.resource().url + '/' + doc['_id'] + "/object.dcm"
         instanceFileName = doc['_id']
         instanceFilePath = os.path.join(tmpdir, instanceFileName)
-        urllib.urlretrieve(instanceURL, instanceFilePath)
+        urllib.request.urlretrieve(instanceURL, instanceFilePath)
         filesToLoad.append(instanceFilePath);
       else:
-        print('this instance is not a class we can load: %s' % classUID)
+        print(('this instance is not a class we can load: %s' % classUID))
     node = None
     if filesToLoad != []:
       status, node = slicer.util.loadVolume(filesToLoad[0], {}, returnNode=True)
@@ -274,7 +275,7 @@ class SlicerChronicleLogic:
     tmpdir = tempfile.mkdtemp()
     instanceFilePath = os.path.join(tmpdir, 'instance.dcm')
     for instanceURL in instanceURLs:
-      urllib.urlretrieve(instanceURL, instanceFilePath)
+      urllib.request.urlretrieve(instanceURL, instanceFilePath)
       self.postStatus('progress', "Inserting %s" % instanceURL)
       slicer.dicomDatabase.insert(instanceFilePath)
 
@@ -309,24 +310,61 @@ class SlicerChronicleLogic:
         instanceFilePath = os.path.join(tmpdir, instanceFileName)
         filesToLoad.append(instanceFilePath)
         self.postStatus('progress', "Downloading %s to %s" % (instanceURL, instanceFilePath))
-        urllib.urlretrieve(instanceURL, instanceFilePath)
+        urllib.request.urlretrieve(instanceURL, instanceFilePath)
         self.postStatus('progress', "Inserting %s" % instanceUID)
         slicer.dicomDatabase.insert(instanceFilePath)
       self.postStatus('progress', "Downloaded %d of %d" % (len(filesToLoad), len(instanceUIDURLPairs)))
 
-    detailsPopup = DICOMDetailsPopup()
-    detailsPopup.offerLoadables(seriesUID, 'Series')
-    detailsPopup.examineForLoading()
-    detailsPopup.loadCheckedLoadables()
+    #detailsPopup = DICOMDetailsPopup()
+    #detailsPopup.offerLoadables(seriesUID, 'Series')
+    #detailsPopup.examineForLoading()
+    #detailsPopup.loadCheckedLoadables()
+
+    DICOMUtils.loadSeriesByUID([seriesUID,])
 
     seriesUIDTag = "0020,000e"
-    for volumeNode in slicer.util.getNodes('vtkMRMLScalarVolumeNode*').values():
+    for volumeNode in list(slicer.util.getNodes('vtkMRMLScalarVolumeNode*').values()):
       instanceUIDs = volumeNode.GetAttribute('DICOM.instanceUIDs')
       if instanceUIDs and instanceUIDs != '':
         uid0 = instanceUIDs.split()[0]
         if slicer.dicomDatabase.instanceValue(uid0, seriesUIDTag) == seriesUID:
           return volumeNode
     return None
+
+    def loadFromDICOMWeb(dicomWebEndpoint, studyUID, seriesUID="", accessToken=""):
+      """ https://github.com/Slicer/Slicer/blob/1c73508bb5df32d1877af0af937681bfdbce1d53/Modules/Scripted/DICOMLib/DICOMUtils.py
+      from Kyle's pull request
+      """
+      from dicomweb_client.api import DICOMwebClient
+      client = DICOMwebClient(
+                  url = dicomWebEndpoint,
+                  headers = { "Authorization": "Bearer {}".format(accessToken) },
+                )
+
+      seriesList = client.search_for_series(study_instance_uid=studyUID)
+      seriesUIDs = []
+      if seriesUID != "":
+        seriesUIDs = [seriesUID]
+      else:
+        for series in seriesList:
+          currentSeriesUID = series['0020000E']['Value'][0]
+          seriesUIDs.append(currentSeriesUID)
+
+      fileNumber = 0
+      for currentSeriesUID in seriesUIDs:
+        instances = client.retrieve_series(
+          study_instance_uid=studyUID,
+          series_instance_uid=currentSeriesUID)
+
+        outputDirectory = (slicer.dicomDatabase.databaseDirectory +
+          "/" + studyUID + "/" + currentSeriesUID + "/")
+        if not os.access(outputDirectory, os.F_OK):
+          os.makedirs(outputDirectory)
+        for instance in instances:
+          filename = outputDirectory + str(fileNumber) + ".dcm"
+          instance.save_as(filename)
+          fileNumber += 1
+        importDicom(outputDirectory)
 
   def studyUIDforInstanceUID(self,instanceUID):
     """Pulls down the instance and gets the studyUID from it"""
@@ -350,7 +388,7 @@ class SlicerChronicleLogic:
 
     # get the instance list and iterate
     # - each row is an instanceUID
-    urlFile = urllib.urlopen(instanceListURL)
+    urlFile = urllib.request.urlopen(instanceListURL)
     instanceListJSON = urlFile.read()
     instanceList = json.loads(instanceListJSON)
     rows = instanceList['rows']
@@ -374,7 +412,7 @@ class SlicerChronicleLogic:
 
     # get the series list and iterate
     # - each row is a series and the key contains the UID and descriptions
-    urlFile = urllib.urlopen(seriesListURL)
+    urlFile = urllib.request.urlopen(seriesListURL)
     seriesListJSON = urlFile.read()
     seriesList = json.loads(seriesListJSON)
     rows = seriesList['rows']
@@ -384,7 +422,7 @@ class SlicerChronicleLogic:
       instanceCount = row['value']
       seriesUID = row['key'][2][2]
       seriesDescription = row['key'][2][1]
-      print(seriesUID + ' should have ' + str(instanceCount) + ' instances' )
+      print((seriesUID + ' should have ' + str(instanceCount) + ' instances' ))
       seriesVolumeNode = self.fetchAndLoadSeriesArchetype(seriesUID)
       if seriesVolumeNode:
           studyVolumeNodes.append(seriesVolumeNode)
@@ -424,7 +462,7 @@ class SlicerChronicleLogic:
     slicer.util.showStatusMessage('Processing load request...')
     zipTmpDir = tempfile.mkdtemp()
     zipFilePath = os.path.join(zipTmpDir, "study.zip")
-    print('downloading', inputData['dataURL'], zipFilePath)
+    print(('downloading', inputData['dataURL'], zipFilePath))
     slicer.util.showStatusMessage('Downloading study zip...')
 
     try:
@@ -441,16 +479,16 @@ class SlicerChronicleLogic:
             slicer.util.showStatusMessage('Downloading chunk %d...' % chunkCount)
             chunkCount += 1
       else:
-        print(response.reason)
+        print((response.reason))
         slicer.util.showStatusMessage('Could not download')
         return
     except ImportError:
-      urllib.urlretrieve(inputData['dataURL'], zipFilePath)
+      urllib.request.urlretrieve(inputData['dataURL'], zipFilePath)
 
     dicomTmpDir = tempfile.mkdtemp()
     slicer.app.applicationLogic().Unzip(zipFilePath, dicomTmpDir)
     slicer.util.showStatusMessage('Unzipping study...')
-    print('Unzip', zipFilePath, dicomTmpDir)
+    print(('Unzip', zipFilePath, dicomTmpDir))
     slicer.util.showStatusMessage('Processing DICOM...')
     self.indexDICOMDirectory(dicomTmpDir)
 
@@ -513,13 +551,13 @@ class SlicerChronicleLogic:
     rowsTag = '0028,0010'
     columsTag = '0028,0011'
     spacingTag = '0028,0030'
-    positionLPS = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imagePositionPatientTag).split('\\'))
-    orientationLPS = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imageOrientationPatientTag).split('\\'))
-    spacing = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, spacingTag).split('\\'))
+    positionLPS = list(map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imagePositionPatientTag).split('\\')))
+    orientationLPS = list(map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imageOrientationPatientTag).split('\\')))
+    spacing = list(map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, spacingTag).split('\\')))
     rows = float(slicer.dicomDatabase.instanceValue(seedInstanceUID, rowsTag))
     colums = float(slicer.dicomDatabase.instanceValue(seedInstanceUID, columsTag))
     pixelSeed = [seed[0] * colums, seed[1] * rows]
-    orientationLPS = map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imageOrientationPatientTag).split('\\'))
+    orientationLPS = list(map(float, slicer.dicomDatabase.instanceValue(seedInstanceUID, imageOrientationPatientTag).split('\\')))
     position = [-1. * positionLPS[0], -1. * positionLPS[1], positionLPS[2]]
 
     # here slice spacing doesn't come into play because seed is in plane of seedInstanceUID
@@ -599,7 +637,7 @@ class SlicerChronicleLogic:
             break
 
     sliceNodes = slicer.util.getNodes('vtkMRMLSliceNode*')
-    for sliceNode in sliceNodes.values():
+    for sliceNode in list(sliceNodes.values()):
       sliceNode.JumpSliceByCentering(*seedRAS)
 
     #
@@ -669,28 +707,28 @@ class SlicerChronicleLogic:
     DICOMLib.DICOMCommand('img2dcm', args).start()
 
     # then run the chronicle record script to upload it
-    print( "running %s with %s" % (self.recordPath, [filePaths[1],]) )
+    print(( "running %s with %s" % (self.recordPath, [filePaths[1],]) ))
     process = qt.QProcess()
     process.start(self.recordPath, [filePaths[1],] )
     process.waitForFinished()
     if process.exitStatus() == qt.QProcess.CrashExit or process.exitCode() != 0:
       stdout = process.readAllStandardOutput()
       stderr = process.readAllStandardError()
-      print('exit status is: %d' % process.exitStatus())
-      print('exit code is: %d' % process.exitCode())
-      print('error is: %d' % process.error())
-      print('standard out is: %s' % stdout)
-      print('standard error is: %s' % stderr)
-      raise( UserWarning("Could not run %s with %s" % (self.recordPath, [filePaths[1],])) )
-    print('dicom saved to', filePaths[1])
+      print(('exit status is: %d' % process.exitStatus()))
+      print(('exit code is: %d' % process.exitCode()))
+      print(('error is: %d' % process.error()))
+      print(('standard out is: %s' % stdout))
+      print(('standard error is: %s' % stderr))
+      raise UserWarning
+    print(('dicom saved to', filePaths[1]))
 
     # finally attach the original image to the new document
     # - it will have been given a new UID by img2dcm, and that
     #   will be the id used in chronicle
-    dataset = dicom.read_file(filePaths[1])
-    print('expecting to find', dataset.SOPInstanceUID)
+    dataset = pydicom.read_file(filePaths[1])
+    print(('expecting to find', dataset.SOPInstanceUID))
     doc = self.chronicleDB.get(dataset.SOPInstanceUID)
-    print('attempting to attache', filePaths[0])
+    print(('attempting to attache', filePaths[0]))
     fp = open(filePaths[0])
     self.chronicleDB.put_attachment(doc, fp, 'image.jpg')
     fp.close()
@@ -703,7 +741,7 @@ class SlicerChronicleLogic:
     sliceNodeByViewName = compareLogic.volumeLightbox(seriesVolumeNode,orientation=orientation)
     referenceFile = seriesVolumeNode.GetStorageNode().GetFileName()
     jpgFilePath = os.path.join(slicer.app.temporaryPath, "%s-%s.jpg" % (orientation, 'seriesRender'))
-    self.saveSliceViews(sliceNodeByViewName.values()[0],jpgFilePath)
+    self.saveSliceViews(list(sliceNodeByViewName.values())[0],jpgFilePath)
     dcmFilePath = os.path.join(slicer.app.temporaryPath, "%s-%s.dcm" % (orientation, 'seriesRender'))
     self.makeAndRecordSecondaryCapture((jpgFilePath,dcmFilePath),"Slicer Series Render", referenceFile)
 
@@ -714,7 +752,7 @@ class SlicerChronicleLogic:
     sliceNodeByViewName = compareLogic.viewerPerVolume(volumeNodes=studyVolumeNodes,orientation=orientation)
     referenceFile = studyVolumeNodes[0].GetStorageNode().GetFileName()
     jpgFilePath = os.path.join(slicer.app.temporaryPath, "%s-%s.jpg" % (orientation, 'seriesRender'))
-    self.saveSliceViews(sliceNodeByViewName.values()[0],jpgFilePath)
+    self.saveSliceViews(list(sliceNodeByViewName.values())[0],jpgFilePath)
     dcmFilePath = os.path.join(slicer.app.temporaryPath, "%s-%s.dcm" % (orientation, 'seriesRender'))
     self.makeAndRecordSecondaryCapture((jpgFilePath,dcmFilePath),"Slicer Study Render", referenceFile)
 
@@ -748,7 +786,7 @@ class CouchChanges:
     couchdb changes.
     """
     try:
-      self.changesSocket = urllib.urlopen(self.couchChangesURL)
+      self.changesSocket = urllib.request.urlopen(self.couchChangesURL)
     except IOError as e:
       print('Got an IOError trying to connect to the database')
 
@@ -829,10 +867,10 @@ class SlicerChronicleContext:
 
     # each row is an entry and the key contains the UID and descriptions
     viewListURL = self.chronicleDB.resource().url + api + args
-    urlFile = urllib.urlopen(viewListURL)
+    urlFile = urllib.request.urlopen(viewListURL)
     viewListJSON = urlFile.read()
     viewList = json.loads(viewListJSON)
-    if viewList.has_key('rows'):
+    if 'rows' in viewList:
       return(viewList['rows'])
     else:
       return([])
@@ -873,7 +911,7 @@ class SlicerChronicleContext:
     seriesUID = series[2][2]
     args = '&key="%s"' % seriesUID
     seriesInstancesURL = self.chronicleDB.resource().url + api + args
-    urlFile = urllib.urlopen(seriesInstancesURL)
+    urlFile = urllib.request.urlopen(seriesInstancesURL)
     instancesJSON = urlFile.read()
     instances = json.loads(instancesJSON)['rows']
     return instances
@@ -887,8 +925,8 @@ class SlicerChronicleContext:
     instanceFileName = doc['_id']
     tmpdir = tempfile.mkdtemp()
     instanceFilePath = os.path.join(tmpdir, instanceFileName)
-    urllib.urlretrieve(instanceURL, instanceFilePath)
-    ds = dicom.read_file(instanceFilePath)
+    urllib.request.urlretrieve(instanceURL, instanceFilePath)
+    ds = pydicom.read_file(instanceFilePath)
     return ds
 
 
@@ -934,8 +972,8 @@ class SlicerChronicleTest(unittest.TestCase):
         change = json.loads(line)
         doc = chronicleDB[change['id']]
         self.delayDisplay(doc)
-        self.assertTrue('comment' in doc.keys())
-    except Exception, e:
+        self.assertTrue('comment' in list(doc.keys()))
+    except Exception as e:
       import traceback
       traceback.print_exc()
       self.delayDisplay('Exception in callback!')
