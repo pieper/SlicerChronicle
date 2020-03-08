@@ -1,7 +1,13 @@
-import unittest
-import os, json, urllib.request, urllib.parse, urllib.error, tempfile, logging
 import couchdb
+import json
+import logging
+import os
 import pydicom
+import requests
+import tempfile
+import urllib.request, urllib.parse, urllib.error
+import unittest
+
 from __main__ import vtk, qt, ctk, slicer
 from DICOMLib import DICOMUtils
 #from DICOMLib import DICOMDetailsPopup
@@ -200,12 +206,16 @@ class SlicerChronicleLogic:
 
   def stepWatcherChangesCallback(self, operationDB, line):
     try:
+      print('decoding', line)
+      line = line.decode()
       if line != "":
         change = json.loads(line)
         doc = operationDB[change['id']]
         if 'type' in list(doc.keys()) and doc['type'] == 'ch.step':
           print(doc)
+          print('got doc, checking status')
           if 'status' in list(doc.keys()) and doc['status'] == 'open':
+            print('got open step')
             if self.canPerformStep(doc):
               operation = doc['desiredProvenance']['operation']
               print("yes, we can do this!!!")
@@ -239,6 +249,8 @@ class SlicerChronicleLogic:
     applicationMatch = fnmatch.fnmatch("3D Slicer", prov['application'])
     versionMatch = fnmatch.fnmatch(slicer.app.applicationVersion, prov['version'])
     operationMatch = prov['operation'] in list(self.operations.keys())
+    print('trying operation: ', operationMatch)
+    print (applicationMatch, versionMatch, operationMatch)
     return (applicationMatch and versionMatch and operationMatch)
 
   def fetchAndLoadSeriesArchetype(self,seriesUID):
@@ -285,7 +297,8 @@ class SlicerChronicleLogic:
     """
     tempDatabaseDir = slicer.app.temporaryPath + '/' + operation
     if tempDatabaseDir != os.path.split(slicer.dicomDatabase.databaseFilename)[0]:
-      originalDatabaseDirectory = DICOMUtils.openTemporaryDatabase(tempDatabaseDir, absolutePath=True)
+      # originalDatabaseDirectory = DICOMUtils.openTemporaryDatabase(tempDatabaseDir, absolutePath=True)
+      originalDatabaseDirectory = DICOMUtils.openTemporaryDatabase(tempDatabaseDir)
       return originalDatabaseDirectory
     else:
       return tempDatabaseDir
@@ -709,7 +722,8 @@ class SlicerChronicleLogic:
     # then run the chronicle record script to upload it
     print(( "running %s with %s" % (self.recordPath, [filePaths[1],]) ))
     process = qt.QProcess()
-    process.start(self.recordPath, [filePaths[1],] )
+    print("PythonSlicer", [self.recordPath, filePaths[1],] )
+    process.start("PythonSlicer", [self.recordPath, filePaths[1],] )
     process.waitForFinished()
     if process.exitStatus() == qt.QProcess.CrashExit or process.exitCode() != 0:
       stdout = process.readAllStandardOutput()
@@ -728,7 +742,7 @@ class SlicerChronicleLogic:
     dataset = pydicom.read_file(filePaths[1])
     print(('expecting to find', dataset.SOPInstanceUID))
     doc = self.chronicleDB.get(dataset.SOPInstanceUID)
-    print(('attempting to attache', filePaths[0]))
+    print(('attempting to attach', filePaths[0]))
     fp = open(filePaths[0])
     self.chronicleDB.put_attachment(doc, fp, 'image.jpg')
     fp.close()
@@ -804,9 +818,9 @@ class SlicerChronicleBrowser:
   """
 
   def __init__(self):
-    self.webView = qt.QWebView()
+    self.webWidget = slicer.qSlicerWebWidget()
 
-  def webViewCallback(self,qurl):
+  def webWidgetCallback(self,qurl):
     url = qurl.toString()
     print(url)
     if url == 'reslicing':
@@ -821,11 +835,11 @@ class SlicerChronicleBrowser:
     <p>
     <a href="chart">Run chart test</a>
     """
-    self.webView.setHtml(html)
-    self.webView.settings().setAttribute(qt.QWebSettings.DeveloperExtrasEnabled, True)
-    self.webView.page().setLinkDelegationPolicy(qt.QWebPage.DelegateAllLinks)
-    self.webView.connect('linkClicked(QUrl)', self.webViewCallback)
-    self.webView.show()
+    self.webWidget.setHtml(html)
+    #self.webWidget.settings().setAttribute(qt.QWebSettings.DeveloperExtrasEnabled, True)
+    #self.webWidget.page().setLinkDelegationPolicy(qt.QWebPage.DelegateAllLinks)
+    #self.webWidget.connect('linkClicked(QUrl)', self.webWidgetCallback)
+    self.webWidget.show()
 
 class SlicerChronicleContext:
   """
@@ -867,9 +881,9 @@ class SlicerChronicleContext:
 
     # each row is an entry and the key contains the UID and descriptions
     viewListURL = self.chronicleDB.resource().url + api + args
-    urlFile = urllib.request.urlopen(viewListURL)
-    viewListJSON = urlFile.read()
-    viewList = json.loads(viewListJSON)
+    print(viewListURL)
+    request = requests.get(viewListURL)
+    viewList = json.loads(request.text)
     if 'rows' in viewList:
       return(viewList['rows'])
     else:
@@ -911,9 +925,10 @@ class SlicerChronicleContext:
     seriesUID = series[2][2]
     args = '&key="%s"' % seriesUID
     seriesInstancesURL = self.chronicleDB.resource().url + api + args
-    urlFile = urllib.request.urlopen(seriesInstancesURL)
-    instancesJSON = urlFile.read()
-    instances = json.loads(instancesJSON)['rows']
+    request = requests.get(seriesInstancesURL)
+    print(seriesInstancesURL)
+    print(request.text)
+    instances = json.loads(request.text)['rows']
     return instances
 
   def instanceDataset(self,instance):
@@ -1033,8 +1048,8 @@ class SlicerChronicleTest(unittest.TestCase):
 
     dirPath = os.path.dirname(slicer.modules.slicerchronicle.path)
     path = os.path.join(dirPath, "site/index.html")
-    url = qt.QUrl("file://" + path)
-    browser.webView.setUrl(url)
+    url = "file://" + path
+    browser.webWidget.setUrl(url)
 
   def test_changesAndHeartbeat(self):
 
@@ -1072,11 +1087,11 @@ class SlicerChronicleTest(unittest.TestCase):
     import SlicerChronicle; SlicerChronicle.SlicerChronicleTest().test_chronicleLoad()
     '''
 
-    logic = SlicerChronicleLogic('http://quantome.org:5984', 'chronicle', 'operations')
+    logic = SlicerChronicleLogic('http://localhost:5984', 'chronicle', 'operations')
     logic.startStepWatcher()
 
     # connect to the database and register the changes API callback
-    couch = couchdb.Server('http://quantome.org:5984')
+    couch = couchdb.Server('http://localhost:5984')
     operationsDB = couch['operations']
 
     # a representative document that should always load
