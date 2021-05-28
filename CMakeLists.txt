@@ -20,6 +20,7 @@ include(${Slicer_USE_FILE})
 # Extension modules
 add_subdirectory(SceneViewer)
 add_subdirectory(SlicerChronicle)
+add_subdirectory(Graph)
 ## NEXT_MODULE
 
 #-----------------------------------------------------------------------------
