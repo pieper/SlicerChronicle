@@ -61,12 +61,9 @@ class Card:
   def __init__(self, htmlText):
 
     label = qt.QLabel(htmlText) 
-
     cardImage = label.grab().toImage()
     cardImage.save("/tmp/card.png")
 
-    cardImageData = vtk.vtkImageData()
-    slicer.qMRMLUtils().qImageToVtkImageData(cardImage, cardImageData)
     planeSource = vtk.vtkPlaneSource()
     planeSource.SetPoint1(-1*label.width,0,0)
     planeSource.SetPoint2(0,0,label.height)
@@ -74,8 +71,15 @@ class Card:
     cardNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLModelNode())
     cardNode.SetName("Text Card")
     cardNode.SetAndObservePolyData(planeSource.GetOutputDataObject(0))
-    cardNode.CreateDefaultDisplayNodes()
 
+    cardNode.CreateDefaultDisplayNodes()
+    cardDisplayNode = cardNode.GetDisplayNode()
+    cardDisplayNode.SetAmbient(1)
+    cardDisplayNode.SetDiffuse(0)
+    cardDisplayNode.SetSpecular(0)
+
+    cardImageData = vtk.vtkImageData()
+    slicer.qMRMLUtils().qImageToVtkImageData(cardImage, cardImageData)
     append = vtk.vtkImageAppend()
     append.SetInputDataObject(cardImageData)
     cardNode.GetDisplayNode().SetTextureImageDataConnection(append.GetOutputPort())
@@ -174,6 +178,7 @@ class GraphLogic(ScriptedLoadableModuleLogic):
       widget = markupsDM.GetWidget(axisNode.GetDisplayNode())
       actors = vtk.vtkPropCollection()
       widget.GetRepresentation().GetActors(actors)
+    comment = '''
       for actorIndex in range(actors.GetNumberOfItems()):
         actor = actors.GetItemAsObject(actorIndex)
         shaderProperty = actor.GetShaderProperty()
@@ -241,6 +246,7 @@ class GraphLogic(ScriptedLoadableModuleLogic):
               """,
               False # only do it once
         )
+    '''
 
   def textureGrid(self, rows=1, columns=20):
     plane = vtk.vtkPlaneSource()
@@ -632,6 +638,52 @@ class GraphLogic(ScriptedLoadableModuleLogic):
     displayNode.SetActiveScalarName("Group")
     displayNode.SetScalarVisibility(True)
 
+  def csvLineData(self, csvFilePath, columnSelection=None, groupSelect=None):
+    fp = open(csvFilePath)
+    dictReader = csv.DictReader(fp)
+    columns = len(dictReader.fieldnames) if columnSelection is not None else len(columnSelection)
+    columnSize = self.baseSize / columns
+    groupSelect = groupSelect if groupSelect is not None else dictReader.fieldnames[0]
+    appendPolyData = vtk.vtkAppendPolyData()
+    lines = 0
+    groupValues = []
+    for row in dictReader:
+      if row[groupSelect] not in groupValues:
+        groupValues.append(row[groupSelect])
+      polyLineSource = vtk.vtkPolyLineSource()
+      polyLineSource.SetNumberOfPoints(columns)
+      value = random.random()
+      for column in range(columns):
+        line = vtk.vtkLineSource()
+        offset = column * columnSize
+        polyLineSource.SetPoint(column, self.origin[0]+offset, self.origin[1] + 1, self.origin[2] + value * self.baseSize)
+        value += (random.random()-0.5) * .05
+      appendPolyData.AddInputConnection(polyLineSource.GetOutputPort())
+      lines += 1
+    appendPolyData.Update()
+
+    gridNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLModelNode())
+    gridNode.SetName("LineData")
+    gridNode.SetAndObservePolyData(appendPolyData.GetOutputDataObject(0))
+    gridNode.CreateDefaultDisplayNodes()
+    groupArray = vtk.vtkFloatArray()
+    groupArray.SetNumberOfTuples(lines*columns)
+    groupArray.SetName("Group")
+    pointData = gridNode.GetPolyData().GetPointData()
+    pointData.AddArray(groupArray)
+    groupNumpy = slicer.util.arrayFromModelPointData(gridNode, "Group")
+    byLine = groupNumpy.reshape(lines,columns)
+    groups = len(groupValues)
+    for line in range(lines):
+      byLine[line] = numpy.random.randint(groups)
+    slicer.util.arrayFromModelPointDataModified(gridNode, "Group")
+    displayNode = gridNode.GetDisplayNode()
+    displayNode.SetOpacity(0.4)
+    displayNode.SetLineWidth(4)
+    displayNode.SetActiveScalarName("Group")
+    displayNode.SetScalarVisibility(True)
+
+
 class GraphTest(ScriptedLoadableModuleTest):
   """
   This is the test case for your scripted module.y
@@ -674,7 +726,7 @@ class GraphTest(ScriptedLoadableModuleTest):
     if False:
       logic.markupsFromTags(tagsToGraph)
 
-    if True:
+    if False:
       logic.lineGrid(columns=90)
 
     if False:
@@ -683,15 +735,44 @@ class GraphTest(ScriptedLoadableModuleTest):
     if False:
       logic.mipmapGrid(rows=10, columns=20)
 
-
     if False:
       logic.lineData(lines=100, columns=90)
 
-    if True:
-      logic.idcLineData("/opt/data/idc/idc_v2-meta.csv")
-
     slicer.modules.card = Card("<strong>About time</strong> we had cards again")
 
-    slicer.modules.page = Page("https://slicer.org")
+    if True:
+      abcdFilePath = "/Users/pieper/data/ABCD/abcdRelease3_merged_DWI_withoutPhilips.csv"
+      columnSelection = ["src_subject_id", "interview_age", "sex_x", "scrn_hr_school", "scrn_hr_disobey", "scrn_hr_sleep", "scrn_hr_fear", "scrn_hr_liecheat", "scrn_hr_music", "scrn_hr_dep", "scrn_hr_help", "scrn_hr_destroy", "scrn_hr_steal", "scrn_hr_sport", "scrn_hr_som", "scrn_hr_read", "scrn_hr_slowfriend", "scrn_hr_stress", "scrn_hr_smoke", "nihtbx_totalcomp_fc", "unhealthy"]
+      logic.csvLineData(abcdFilePath, columnSelection=columnSelection, groupSelect="sex_x")
+
+    """ Pandas Notes:
+
+pip_install("pandas")
+import pandas, numpy
+
+df = pandas.read_csv("/Users/pieper/data/ABCD/abcdRelease3_merged_DWI_withoutPhilips.csv")
+
+print(df.columns.values)
+
+ppiq = df.pivot_table(index='scrn_hr_school', columns='sex_x', values="nihtbx_totalcomp_fc", aggfunc="mean")
+print(ppiq)
+
+list(df.sort_values('nihtbx_totalcomp_fc')['nihtbx_totalcomp_fc'])
+
+df[df['nihtbx_totalcomp_fc'] < 20]['nihtbx_totalcomp_fc']
+
+df.sum().loc['interview_age'] / df.count()[0]
+
+df.loc[:,'interview_age'].sum() / df.count()[0] / 12
+
+
+"""
+
+
+    if False:
+      logic.idcLineData("/opt/data/idc/idc_v2-meta.csv")
+
+    if False:
+      slicer.modules.page = Page("https://slicer.org")
 
     self.delayDisplay('Test passed!')
