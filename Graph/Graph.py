@@ -685,7 +685,7 @@ class GraphLogic(ScriptedLoadableModuleLogic):
     displayNode.SetScalarVisibility(True)
 
   def pandasLineData(self, csvFilePath, columnSelection=None):
-    dataFrame = pandas.read_csv(csvFilePath, usecols=columnSelection, nrows=1000)
+    dataFrame = pandas.read_csv(csvFilePath, usecols=columnSelection, nrows=2000)
 
     slicer.modules.dataFrame = dataFrame
 
@@ -700,7 +700,9 @@ class GraphLogic(ScriptedLoadableModuleLogic):
         valueRanges[column] = (0, len(dataFrame.value_counts(column).keys().to_list())-1)
     appendPolyData = vtk.vtkAppendPolyData()
     lines = 0
-    for rowIndex in range(dataFrame.shape[0]):
+    rowCount = dataFrame.shape[0]
+    for rowIndex in range(rowCount):
+      anterior = self.origin[1] + self.baseSize * rowIndex / rowCount
       polyLineSource = vtk.vtkPolyLineSource()
       polyLineSource.SetNumberOfPoints(columns)
       for columnIndex in range(len(columnSelection)):
@@ -712,7 +714,7 @@ class GraphLogic(ScriptedLoadableModuleLogic):
           value = (value - valueRange[0]) / (valueRange[1] - valueRange[0])
         else:
           value = dataFrame.value_counts(column).keys().to_list().index(value) / valueRange[1]
-        polyLineSource.SetPoint(columnIndex, self.origin[0]+self.baseSize - offset, self.origin[1] + 1, self.origin[2] + value * self.baseSize)
+        polyLineSource.SetPoint(columnIndex, self.origin[0]+self.baseSize - offset, anterior, self.origin[2] + value * self.baseSize)
       appendPolyData.AddInputConnection(polyLineSource.GetOutputPort())
       lines += 1
     appendPolyData.Update()
