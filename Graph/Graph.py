@@ -1,6 +1,7 @@
 import csv
 import numpy
 import os
+import pandas
 import pydicom
 import random
 import unittest
@@ -668,21 +669,75 @@ class GraphLogic(ScriptedLoadableModuleLogic):
     gridNode.CreateDefaultDisplayNodes()
     groupArray = vtk.vtkFloatArray()
     groupArray.SetNumberOfTuples(lines*columns)
-    groupArray.SetName("Group")
+    groupArray.SetName("Subject")
     pointData = gridNode.GetPolyData().GetPointData()
     pointData.AddArray(groupArray)
-    groupNumpy = slicer.util.arrayFromModelPointData(gridNode, "Group")
+    groupNumpy = slicer.util.arrayFromModelPointData(gridNode, "Subject")
     byLine = groupNumpy.reshape(lines,columns)
     groups = len(groupValues)
     for line in range(lines):
       byLine[line] = numpy.random.randint(groups)
-    slicer.util.arrayFromModelPointDataModified(gridNode, "Group")
+    slicer.util.arrayFromModelPointDataModified(gridNode, "Subject")
     displayNode = gridNode.GetDisplayNode()
     displayNode.SetOpacity(0.4)
     displayNode.SetLineWidth(4)
-    displayNode.SetActiveScalarName("Group")
+    displayNode.SetActiveScalarName("Subject")
     displayNode.SetScalarVisibility(True)
 
+  def pandasLineData(self, csvFilePath, columnSelection=None):
+    dataFrame = pandas.read_csv(csvFilePath, usecols=columnSelection, nrows=1000)
+
+    slicer.modules.dataFrame = dataFrame
+
+    columns = dataFrame.shape[1] if columnSelection is not None else len(columnSelection)
+    columnSpacing = self.baseSize / columns
+    valueRanges = {}
+    for column in columnSelection:
+      value = dataFrame[column][0]
+      if not isinstance(value, str):
+        valueRanges[column] = (dataFrame[column].min(), dataFrame[column].max())
+      else:
+        valueRanges[column] = (0, len(dataFrame.value_counts(column).keys().to_list())-1)
+    appendPolyData = vtk.vtkAppendPolyData()
+    lines = 0
+    for rowIndex in range(dataFrame.shape[0]):
+      polyLineSource = vtk.vtkPolyLineSource()
+      polyLineSource.SetNumberOfPoints(columns)
+      for columnIndex in range(len(columnSelection)):
+        column = columnSelection[columnIndex]
+        offset = columnIndex * columnSpacing
+        valueRange = valueRanges[columnSelection[columnIndex]]
+        value = dataFrame[column][rowIndex]
+        if not isinstance(value, str):
+          value = (value - valueRange[0]) / (valueRange[1] - valueRange[0])
+        else:
+          value = dataFrame.value_counts(column).keys().to_list().index(value) / valueRange[1]
+        polyLineSource.SetPoint(columnIndex, self.origin[0]+self.baseSize - offset, self.origin[1] + 1, self.origin[2] + value * self.baseSize)
+      appendPolyData.AddInputConnection(polyLineSource.GetOutputPort())
+      lines += 1
+    appendPolyData.Update()
+
+    gridNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLModelNode())
+    gridNode.SetName("LineData")
+    gridNode.SetAndObservePolyData(appendPolyData.GetOutputDataObject(0))
+    gridNode.CreateDefaultDisplayNodes()
+    groupArray = vtk.vtkFloatArray()
+    groupArray.SetNumberOfTuples(lines*columns)
+    groupArray.SetName("Subject")
+    pointData = gridNode.GetPolyData().GetPointData()
+    pointData.AddArray(groupArray)
+    groupNumpy = slicer.util.arrayFromModelPointData(gridNode, "Subject")
+    byLine = groupNumpy.reshape(lines,columns)
+    for line in range(lines):
+      byLine[line] = line
+    slicer.util.arrayFromModelPointDataModified(gridNode, "Subject")
+    displayNode = gridNode.GetDisplayNode()
+    displayNode.SetOpacity(0.4)
+    displayNode.SetLineWidth(1)
+    displayNode.SetActiveScalarName("Subject")
+    displayNode.SetScalarVisibility(True)
+    viridisNode = slicer.util.getNode('Viridis')
+    displayNode.SetAndObserveColorNodeID(viridisNode.GetID())
 
 class GraphTest(ScriptedLoadableModuleTest):
   """
@@ -710,13 +765,14 @@ class GraphTest(ScriptedLoadableModuleTest):
     self.delayDisplay("Starting the test")
 
     threeDView = slicer.app.layoutManager().threeDWidget(0).threeDView()
+    threeDView.cameraNode().SetParallelProjection(False)
     threeDView.renderWindow().SetMultiSamples(16)
     viewNode = threeDView.mrmlViewNode()
 
     viewNode.SetBoxVisible(False)
     viewNode.SetAxisLabelsVisible(False)
-    viewNode.SetBackgroundColor(1,1,1)
-    viewNode.SetBackgroundColor2(1,1,1)
+    viewNode.SetBackgroundColor(0,0,0)
+    viewNode.SetBackgroundColor2(0,0,0)
 
     logic = GraphLogic()
     slicer.modules.GraphWidget.logic = logic
@@ -738,12 +794,18 @@ class GraphTest(ScriptedLoadableModuleTest):
     if False:
       logic.lineData(lines=100, columns=90)
 
-    slicer.modules.card = Card("<strong>About time</strong> we had cards again")
+    if False:
+      slicer.modules.card = Card("<strong>About time</strong> we had cards again")
 
     if True:
-      abcdFilePath = "/Users/pieper/data/ABCD/abcdRelease3_merged_DWI_withoutPhilips.csv"
-      columnSelection = ["src_subject_id", "interview_age", "sex_x", "scrn_hr_school", "scrn_hr_disobey", "scrn_hr_sleep", "scrn_hr_fear", "scrn_hr_liecheat", "scrn_hr_music", "scrn_hr_dep", "scrn_hr_help", "scrn_hr_destroy", "scrn_hr_steal", "scrn_hr_sport", "scrn_hr_som", "scrn_hr_read", "scrn_hr_slowfriend", "scrn_hr_stress", "scrn_hr_smoke", "nihtbx_totalcomp_fc", "unhealthy"]
-      logic.csvLineData(abcdFilePath, columnSelection=columnSelection, groupSelect="sex_x")
+      abcdFilePath = "/Users/pieper/data/ABCD/abcdRelease3_merged_DWI_withoutPhilips.csv" ;# for sliver
+      abcdFilePath = "/opt/data/SlicerDMRI/NDA-ABCD-Tractology/abcdRelease3_merged_DWI_withoutPhilips.csv" ;# for hive
+
+      columnSelection = ["src_subject_id", "device_id", "interview_age", "sex_x", "scrn_hr_school", "scrn_hr_disobey", "scrn_hr_sleep", "scrn_hr_fear", "scrn_hr_liecheat", "scrn_hr_music", "scrn_hr_dep", "scrn_hr_help", "scrn_hr_destroy", "scrn_hr_steal", "scrn_hr_sport", "scrn_hr_som", "scrn_hr_read", "scrn_hr_slowfriend", "scrn_hr_stress", "scrn_hr_smoke", "nihtbx_totalcomp_fc", "unhealthy"]
+
+      columnSelection = ["src_subject_id", "device_id", "interview_age", "sex_x", "nihtbx_totalcomp_fc", "unhealthy"]
+
+      logic.pandasLineData(abcdFilePath, columnSelection=columnSelection)
 
     """ Pandas Notes:
 
@@ -765,12 +827,15 @@ df.sum().loc['interview_age'] / df.count()[0]
 
 df.loc[:,'interview_age'].sum() / df.count()[0] / 12
 
+Device4
+
 
 """
 
 
     if False:
-      logic.idcLineData("/opt/data/idc/idc_v2-meta.csv")
+      csvFilePath = "/opt/data/idc/idc_v2-meta.csv"
+      logic.idcLineData(csvFilePath=csvFilePath)
 
     if False:
       slicer.modules.page = Page("https://slicer.org")
